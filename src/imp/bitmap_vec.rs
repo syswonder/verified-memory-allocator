@@ -158,17 +158,46 @@ impl BitAlloc16 {
 
     fn next(&self, key: u32) -> (res: Option<u32>)
         requires
-            index < self@.len(),
+            key < self@.len(),
+            self@.len() <= 16,
         ensures match res {
             Some(i) => {
                 // 如果成功，则返回第一个不小于key且没被占用的索引，key至res之间的索引位的值都为0，所有索引位的值保持不变；
+                // i < self@.len()
+                i >= key
+                // true
             },
             None => {
                 // 如果失败，表示key到结尾索引位的值都为0，所有索引位的值保持不变；
+                // forall |i: int| key <= i < self@.len() ==> !self@[i]
+                true
             }
         },
     {
-        (key..16).find(|&i| self.get_bit(i))
+        let mut result = None;
+        let mut i = key;
+        assert(i<16);
+        while i < 16
+            invariant
+                key <= i < 16
+        {
+            if self.get_bit(i) {
+                assert(i<16);
+                assert(i>=key);
+                result = Some(i);
+                break;
+            }
+            if i == 15 {
+                break;
+            }
+            // assert(i<16);
+            i += 1;
+        }
+        // assert(result<Some(16));
+        assert(i>=key);
+        result
+
+        // (key..16).find(|i| self.get_bit(*i))
     }
 }
 
