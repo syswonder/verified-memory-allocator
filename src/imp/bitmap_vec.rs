@@ -16,13 +16,10 @@ macro_rules! get_bit16 {
 }
 
 macro_rules! get_bits16_macro {
-    ($a:expr, $range:expr) => {{
+    ($a:expr, $st:expr, $ed:expr) => {{
         let bitlen = 16;
-        let start = $range.start;
-        let end = $range.end;
-
-        let bits = ($a << (bitlen - end)) >> (bitlen - end);
-        bits >> start
+        let bits = ($a << (bitlen - $ed)) >> (bitlen - $ed);
+        bits >> $st
     }};
 }
 
@@ -50,14 +47,12 @@ macro_rules! set_bit16 {
 }
 
 macro_rules! set_bits16_macro {
-    ($a:expr, $range:expr, $val:expr) => {{
+    ($a:expr, $st:expr, $ed:expr, $val:expr) => {{
         let bitlen = 16;
-        let start = $range.start;
-        let end = $range.end;
 
-        let mask = !(!0u16 << (bitlen - end) >> (bitlen - end) >> start << start);
+        let mask = !(!0u16 << (bitlen - $ed) >> (bitlen - $ed) >> $st << $st);
 
-        ($a & mask) | ($val << start)
+        ($a & mask) | ($val << $st)
     }};
 }
 
@@ -85,34 +80,43 @@ proof fn set_bit16_proof(bv_new: u16, bv_old: u16, index: u16, bit: bool)
 {
 }
 
-// #[verifier::bit_vector]
-// proof fn set_bits16_proof(bv_new: u16, bv_old: u16, range: Range<u16>, val: u16)
-//     requires
-//         range.start < 16,
-//         range.end <= 16,
-//         range.start < range.end,
-//         value << ((u16::BITS) as u16 - (range.end - range.start)) >>
-//             ((u16::BITS) as u16 - (range.end - range.start)) == value,
-//         bv_new == set_bits16!(bv_old, range, val),
-//     ensures
-//         get_bit16!(bv_new, index) == bit,
-//         forall|loc2: u16|
-//             (loc2 < 16 && loc2 != index) ==> (get_bit16!(bv_new, loc2) == get_bit16!(bv_old, loc2)),
-// {
-// }
-
-
-proof fn get_bits16_proof(bv_gets: u16, bits: u16, range:Range<u16>)
+#[verifier::bit_vector]
+proof fn set_bits16_proof(bv_new: u16, bv_old: u16, st:u16, ed:u16, val: u16)
     requires
-        bv_gets == get_bits16!(bits, range),
-        range.start < 16,
-        range.end <= 16,
-        range.start < range.end,
+        st < 16,
+        ed <= 16,
+        st < ed,
+        val << ((u16::BITS) as u16 - (ed - st)) as usize >>
+            ((u16::BITS) as u16 - (ed - st)) as usize == val,
+        bv_new == set_bits16!(bv_old, st, ed, val),
     ensures
-        get_bits16!(bits, range) == bv_gets,
-        forall|i: u16| 0 <= i < (range.end - range.start) ==> ((get_bit16!(bv_gets, i)) == get_bit16!(bits, (range.start as u16 + i) as u16)),
+        get_bits16!(bv_new, st, ed) == val,
+        forall|loc2: u16|
+            (0 <= loc2 < st || ed <= loc2 < 16) ==> (get_bit16!(bv_new, loc2) == get_bit16!(bv_old, loc2)),
 {
 }
+
+#[verifier::bit_vector]
+proof fn get_bits16_proof(bv_gets: u16, bits: u16, st:u16, ed:u16)
+    requires
+        bv_gets == get_bits16!(bits, st, ed),
+        st < 16,
+        ed <= 16,
+        st < ed,
+    ensures
+        forall|i: u16| 0 <= i < (ed - st) ==> ((get_bit16!(bv_gets, i)) == get_bit16!(bits, (st + i) as u16)),
+{
+}
+
+// #[verifier::bit_vector]
+// proof fn shift_is_reversible(val: u16, width: u16)
+//     requires width <= 16,
+//         val == val & ((1u16 << width) - 1) as u16,
+//     ensures ((val << (16 - width)) >> (16 - width)) == val
+// {
+
+// }
+
 
 pub struct BitAlloc16 {
     bits: u16,
@@ -148,31 +152,15 @@ impl BitAlloc16 {
             range.end <= self@.len(),
             range.start < range.end,
         ensures
-            // (1u16 & 0u16) == 0u16,
-            // true
-            // forall|i: int| 0 <= i < (range.end - range.start) ==> ((bits & (1u16 << i)) != 0) == self@[range.start + i],
             forall|i: int| 0 <= i < (range.end - range.start) ==> (u16_view(bits)[i]) == self@[range.start + i],
             // forall|i: u16| 0 <= i < (range.end - range.start) ==> ((get_bit16!(bits, i)) == get_bit16!(self.bits, (range.start as u16 + i) as u16)),
     {
-        let bits = get_bits16_macro!(self.bits, range);
+        let bv_gets = get_bits16_macro!(self.bits, range.start, range.end);
+        // assert((bv_gets & (1u16)) == 0 || (bv_gets & (1u16)) == 1) by (bit_vector);
         proof {
-            let s = u16_view(bits);
-            assert(range.start < self@.len());
-            assert(s[0] == self@[range.start as int]);
-            assume(forall|i: int| 0 <= i < (range.end - range.start) ==> (s[i]) == self@[range.start + i]);
-        }
-        // Seq::new(16, |i: int| u16_view(bits)[i]);
-        // proof {
-        //     assert(bits >> (range.end - range.start) == 0) by (compute);
-        //     assert(((bits << range.start) & self.bits) == bits) by (compute);
-        // }
-        // proof{
-        //     get_bits16_proof(bits,self.bits,range);
-        // }
-        // assert((bits & (1u16)) == 0 || (bits & (1u16)) == 1) by (compute);
-        // assert(((bits & (1u16)) !=0 ) == self@[range.start as int]);
-        // assume(forall|i: int| 0 <= i < (range.end - range.start) ==> ((bits & (1u16 << i)) != 0) == self@[range.start + i]);
-        bits
+            get_bits16_proof(bv_gets, self.bits, range.start, range.end);
+        };
+        bv_gets
     }
 
     fn set_bit(&mut self, index: u32, bit: bool)
@@ -198,46 +186,27 @@ impl BitAlloc16 {
         ;
     }
 
-    // fn set_bits(&mut self, range: Range<u16>, value: u16)
-    //     requires
-    //         range.start < old(self)@.len(),
-    //         range.end <= old(self)@.len(),
-    //         range.start < range.end,
-    //         value << ((u16::BITS) as u16 - (range.end - range.start)) >>
-    //             ((u16::BITS) as u16 - (range.end - range.start)) == value,
-    //     ensures
-    //         forall|i: int| range.start <= i < range.end ==> self@ == old(self)@.update(i,((value & (1u16 << i)) != 0))
-
-
-    //         // self@ == old(self)@.update(index as int, bit),
-    //         // res == set_bits_spec(bit, range, value)
-    // {
-    //     let bit_width = (u16::BITS) as u16;
-
-    //     let bitmask:u16 = !(!0u16 << (bit_width - range.end) >>
-    //                         (bit_width - range.end) >>
-    //                         range.start << range.start);
-
-    //     // set bits
-    //     self.bits = (self.bits & bitmask) | (value << range.start)
-
-
-    //     // let bit_index: u32 = index % 16;
-    //     let bv_old: u16 = self.bits;
-    //     let bv_new: u16 = set_bits16_macro!(bv_old, range, value);
-    //     proof {
-    //         set_bits16_proof(bv_new, bv_old, range, value);
-    //     }
-    //     ;
-    //     self.bits = bv_new;
-    //     proof {
-    //         assert_seqs_equal!(
-    //             self.view(),
-    //             old(self).view().update(index as int, bit)
-    //         );
-    //     }
-    //     ;
-    // }
+    fn set_bits(&mut self, range: Range<u16>, value: u16)
+        requires
+            range.start < old(self)@.len(),
+            range.end <= old(self)@.len(),
+            range.start < range.end,
+            value << ((u16::BITS) as u16 - (range.end - range.start)) as usize >>
+                ((u16::BITS) as u16 - (range.end - range.start)) as usize == value,
+        ensures
+            get_bits16!(self.bits, range.start, range.end) == value,
+            forall|loc2: int|
+                (0 <= loc2 < range.start || range.end <= loc2  < 16) ==> self@[loc2] == old(self)@[loc2],
+    {
+        let bv_old: u16 = self.bits;
+        let bv_new: u16 = set_bits16_macro!(bv_old, range.start, range.end, value);
+        proof {
+            set_bits16_proof(bv_new, bv_old, range.start, range.end, value);
+        }
+        ;
+        self.bits = bv_new;
+        assert(get_bits16!(bv_new, range.start, range.end) == value);
+    }
 
     fn alloc(&mut self) -> (res: Option<u32>)
     //如果成功，则分配了一个没被占用的索引，其它索引位的值保持不变；
@@ -288,11 +257,60 @@ impl BitAlloc16 {
         self.set_bit(key, true);
     }
 
-    // fn remove(&mut self, range: Range<usize>) -> (res: usize)
-    // //执行后的指定范围内bit位的值全为0；
-    // {
-    //     set_bits_exec(self.val.into(), range, 0)
-    // }
+    fn insert(&mut self, range: Range<u16>)
+    //执行后的指定范围内bit位的值全为1；
+        requires
+            range.start < old(self)@.len(),
+            range.end <= old(self)@.len(),
+            range.start < range.end,
+        ensures
+            // forall|loc1: int|
+            //     (range.start <= loc1 < range.end) ==> self@[loc1] == true,
+            // get_bits16!(self.bits, range.start, range.end) == get_bits16!(0xffffu16, range.start, range.end),
+            get_bits16!(self.bits, range.start, range.end) == (0xffffu16 >> (16 - (range.end - range.start))),
+            forall|loc2: int|
+                (0 <= loc2 < range.start || range.end <= loc2  < 16) ==> self@[loc2] == old(self)@[loc2],
+    {
+        let width = range.end - range.start;
+        let insert_val = 0xffffu16 >> (16 - width);
+
+        // shift_is_reversible(insert_val, width); 等价于下面的assert
+
+        // assert(width<=16);
+        // assert(((u16::BITS) as u16 - width) == (16 - width));
+        // assert(insert_val == 0xffffu16 >> (16 - width) as u16);
+
+        //确保insert_val的高（16 - width）位为0
+        // assert(0xffffu16 >> (16 - width) as u16 == 0xffffu16 >> (16 - width) as u16 & ((1u16 << width) - 1) as u16) by (bit_vector);
+
+        // 确保insert_val的高（16 - width）位为0
+        assert((0xffffu16 >> (16 - width) as u16) << ((u16::BITS) as u16 - width) as u16 >>
+        ((u16::BITS) as u16 - width) as u16 == (0xffffu16 >> (16 - width) as u16)) by (bit_vector);
+
+        self.set_bits(range, insert_val);
+        // assert(get_bits16!(self.bits, range.start, range.end) == insert_val);
+
+        // self.val.set_bits(range.clone(), 0xffff.get_bits(range));
+    }
+
+    fn remove(&mut self, range: Range<u16>)
+    //执行后的指定范围内bit位的值全为0；
+        requires
+            range.start < old(self)@.len(),
+            range.end <= old(self)@.len(),
+            range.start < range.end,
+        ensures
+            get_bits16!(self.bits, range.start, range.end) == 0,
+            forall|loc2: int|
+                (0 <= loc2 < range.start || range.end <= loc2  < 16) ==> self@[loc2] == old(self)@[loc2],
+    {
+        let value:u16 = 0;
+        let width = range.end - range.start;
+        assert(((u16::BITS) as u16 - width) >= 0);
+        assert(0u16 << ((u16::BITS) as u16 - width) as usize >>
+        ((u16::BITS) as u16 - width) as usize == 0u16) by (bit_vector);
+        self.set_bits(range, value);
+    }
 
     fn is_zero(&self) -> (res:bool)
         ensures
@@ -351,23 +369,6 @@ impl BitAlloc16 {
             }
             i += 1;
         }
-        // if result.is_none() {
-        //     assert(i == n);
-        //     // assert(i >= n);
-        //     // assert(i == 16);
-        //     assert(n == self@.len());
-        //     assert(forall|k: int| key <= k < self@.len() ==> self@[k] == false);
-        //     // assert(forall|k: int| key <= k < 16 ==> self@[k] == false);
-        // } else{
-        //     assert((result.is_some() && i < n));
-        //     assert(i<n);
-        //     let x = result.unwrap();
-        //     assert(x == i);
-        //     assert(x < self@.len());
-        //     assert(x < self@.len() &&
-        //             x >= key &&
-        //             forall|i: int| key <= i < x ==> self@[i] == false);
-        // }
         result
 
         // (key..16).find(|i| self.get_bit(*i))
