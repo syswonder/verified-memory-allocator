@@ -108,6 +108,13 @@ proof fn get_bits16_proof(bv_gets: u16, bits: u16, st:u16, ed:u16)
 {
 }
 
+pub proof fn ensure_val_nonzero(bits: u16)
+    requires bits != 0,
+    ensures bits.trailing_zeros() < 16,
+{
+    // 证明 trailing_zeros() < 16
+}
+
 // #[verifier::bit_vector]
 // proof fn shift_is_reversible(val: u16, width: u16)
 //     requires width <= 16,
@@ -123,7 +130,7 @@ pub struct BitAlloc16 {
 }
 
 impl BitAlloc16 {
-    fn CAP() -> usize {
+    fn CAP() -> u16 {
         16
     }
 
@@ -136,13 +143,13 @@ impl BitAlloc16 {
         Seq::new(width, |i: int| u16_view(self.bits@)[i])
     }
 
-    fn get_bit(&self, index: u32) -> (bit: bool)
+    fn get_bit(&self, index: u16) -> (bit: bool)
         requires
             index < self@.len(),
         ensures
             bit == self@[index as int],
     {
-        let bit_index: u32 = index % 16;
+        let bit_index: u16 = index % 16;
         get_bit16_macro!(self.bits, bit_index as u16)
     }
 
@@ -163,13 +170,13 @@ impl BitAlloc16 {
         bv_gets
     }
 
-    fn set_bit(&mut self, index: u32, bit: bool)
+    fn set_bit(&mut self, index: u16, bit: bool)
         requires
             index < old(self)@.len(),
         ensures
             self@ == old(self)@.update(index as int, bit),
     {
-        let bit_index: u32 = index % 16;
+        let bit_index: u16 = index % 16;
         let bv_old: u16 = self.bits;
         let bv_new: u16 = set_bit16_macro!(bv_old, bit_index as u16, bit);
         proof {
@@ -208,7 +215,7 @@ impl BitAlloc16 {
         assert(get_bits16!(bv_new, range.start, range.end) == value);
     }
 
-    fn alloc(&mut self) -> (res: Option<u32>)
+    fn alloc(&mut self) -> (res: Option<u16>)
     //如果成功，则分配了一个没被占用的索引，其它索引位的值保持不变；
     //新分配的索引要小于16，并且get_bit(i)获取的值最初为1，alloc之后为0，表示当前位已分配;
 
@@ -220,13 +227,13 @@ impl BitAlloc16 {
             None => self.bits == 0,
         },
     {
-        if self.is_zero() {
+        if !self.any() {
             return None;
         }
         proof {
             ensure_val_nonzero(self.bits);  // 验证 self.bits != 0 时 trailing_zeros() < 16
         }
-        let i = self.bits.trailing_zeros();
+        let i = self.bits.trailing_zeros() as u16; // 保证了i为低位起的第一个1
         assert(i>=0);
         assert(i<16);
         let bv_old: u16 = self.bits;
@@ -246,7 +253,21 @@ impl BitAlloc16 {
         Some(i)
     }
 
-    fn dealloc(&mut self, key: u32)
+    // fn alloc_contiguous(&mut self, size: u16, align_log2: u16) -> (res: Option<u32>)
+    // //如果成功，则分配了一段大小为size的空间，其它索引位的值保持不变；
+    // //新分配的索引base+size要小于16，并且get_bits(range)获取的值在该范围内的bit位都为1，alloc_contiguous之后都为0；
+
+    // //如果失败，则说明没有符合要求的空间，状态不变
+    // {
+    //     if let Some(base) = find_contiguous(self, Self::CAP, size, align_log2) {
+    //         self.remove(base..base + size);
+    //         Some(base)
+    //     } else {
+    //         None
+    //     }
+    // }
+
+    fn dealloc(&mut self, key: u16)
     //释放前该索引位置得是0，释放后是1，其它索引位的值保持不变；
     //key得小于16
         requires
@@ -312,14 +333,15 @@ impl BitAlloc16 {
         self.set_bits(range, value);
     }
 
-    fn is_zero(&self) -> (res:bool)
+    fn any(&self) -> (res:bool)
         ensures
-            res == (self.bits == 0),
+            res == (self.bits != 0),
     {
-        self.bits == 0
+        self.bits != 0
     }
 
-    fn test(&self, key: u32) -> (res:bool)
+
+    fn test(&self, key: u16) -> (res:bool)
         requires
             key < self@.len(),
         ensures
@@ -328,7 +350,7 @@ impl BitAlloc16 {
         self.get_bit(key)
     }
 
-    fn next(&self, key: u32) -> (res: Option<u32>)
+    fn next(&self, key: u16) -> (res: Option<u16>)
         requires
             key < self@.len(),
         ensures match res {
@@ -344,7 +366,7 @@ impl BitAlloc16 {
             }
         },
     {
-        let n:u32 = u16::BITS;
+        let n = u16::BITS as u16;
         let mut result = None;
         let mut i = key;
         assert(i<n);
@@ -375,12 +397,56 @@ impl BitAlloc16 {
     }
 }
 
-pub proof fn ensure_val_nonzero(bits: u16)
-    requires bits != 0,
-    ensures bits.trailing_zeros() < 16,
+fn find_contiguous(ba: &mut BitAlloc16, capacity: u16, size: u16, align_log2: u16,) -> (res: Option<u16>)
+    requires
+        capacity <=16,
+        0 < size,
+    ensures match res {
+        Some(i) => {
+            //如果成功，则分配了一段大小为size的空间，其它索引位的值保持不变；
+            //新分配的索引base+size要小于16，并且get_bits(range)获取的值在该范围内的bit位都为1，alloc_contiguous之后都为0；
+            i + size <= capacity &&
+            i % (1 << align_log2) == 0 &&
+            
+
+        },
+        None => {
+            //如果失败，则说明没有符合要求的空间，状态不变
+            //所有连续空间的内存小于要求分配的空间 || 连续空间的内存大于要求分配的空间但是不满足对齐
+            //满足对齐时 连续空间的内存小于要求分配内存的空间
+            ba == 0 ||
+            forall|i: int| 0 <= i < 16
+        }
+    },
 {
-    // 证明 trailing_zeros() < 16
+
+    if capacity < (1 << align_log2) || !ba.any() {
+        return None;
+    }
+    let mut base = 0;
+    let mut offset = base;
+    while offset < capacity {
+        if let Some(next) = ba.next(offset) {
+            if next != offset {
+                // it can be guarenteed that no bit in (offset..next) is free
+                // move to next aligned position after next-1
+                assert!(next > offset);
+                base = (((next - 1) >> align_log2) + 1) << align_log2;
+                assert_ne!(offset, next);
+                offset = base;
+                continue;
+            }
+        } else {
+            return None;
+        }
+        offset += 1;
+        if offset - base == size {
+            return Some(base);
+        }
+    }
+    None
 }
+
 
 }
 #[verifier::external]
