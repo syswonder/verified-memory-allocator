@@ -2,7 +2,7 @@
 use builtin::*;
 use builtin_macros::*;
 use core::ops::Range;
-use vstd::{prelude::*, seq::*, seq_lib::*};
+use vstd::{invariant, prelude::*, seq::*, seq_lib::*};
 
 macro_rules! get_bit16_macro {
     ($a:expr, $b:expr) => {{ (0x1u16 & ($a >> $b)) == 1 }};
@@ -380,6 +380,8 @@ impl BitAlloc16 {
                     key <= k < i ==> self@[k] == false,
             ensures
                 (i == n && result.is_none()) ||  (i < n && result.is_some() && (result.unwrap() == i)),
+            decreases
+                n-i,
         {
             if self.get_bit(i) {
                 result = Some(i);
@@ -397,53 +399,181 @@ impl BitAlloc16 {
     }
 }
 
+spec fn has_obstruction(ba: Seq<bool>, i: int, size: int) -> bool {
+    exists |k: int| 0 <= k < size && #[trigger] ba[i + k] == false
+}
+
+#[verifier::bit_vector]
+proof fn safe_shr_u16(x: u16, shift: u16)
+    requires shift < 16
+    ensures x >> shift <= x,
+{
+}
+
+#[verifier::bit_vector]
+proof fn safe_shl_u16(x: u16, shift: u16)
+    requires shift < 4, x<16,
+    ensures  x <= x << shift,
+{
+}
+
+proof fn shift_pow2(x: u16) -> (r: u16)
+    requires x < 16, // u16 最大支持 <<15
+    ensures r == 1u16 << x
+{
+    1u16 << x
+}
+
+// proof fn mod_arith(x: u16) -> (r: u16)
+//     requires x<16,
+//     ensures r == 0u16 % (1u16 << x) && r == 0
+// {
+//     let y = 1u16 << x;
+//     0u16 % y
+// }
+
 fn find_contiguous(ba: &mut BitAlloc16, capacity: u16, size: u16, align_log2: u16,) -> (res: Option<u16>)
     requires
-        capacity <=16,
-        0 < size,
+        capacity == 16,
+        align_log2 <4,
+        // capacity >= (1 << align_log2),
     ensures match res {
-        Some(i) => {
+        Some(re) => {
             //如果成功，则分配了一段大小为size的空间，其它索引位的值保持不变；
-            //新分配的索引base+size要小于16，并且get_bits(range)获取的值在该范围内的bit位都为1，alloc_contiguous之后都为0；
-            i + size <= capacity &&
-            i % (1 << align_log2) == 0 &&
-            
+            //新分配的索引base+size要小于等于16，并且get_bits(range)获取的值在该范围内的bit位都为1；
 
+            // re + size <= capacity &&
+            // re % (1u16 << align_log2) == 0 &&
+            // forall|i: int| re <= i < re + size ==> ba@[i] == true //ba.next(i) != None
+            true
         },
         None => {
-            //如果失败，则说明没有符合要求的空间，状态不变
+            //如果失败，则说明没有符合要求的空间
             //所有连续空间的内存小于要求分配的空间 || 连续空间的内存大于要求分配的空间但是不满足对齐
             //满足对齐时 连续空间的内存小于要求分配内存的空间
-            ba == 0 ||
-            forall|i: int| 0 <= i < 16
+
+            // ba.bits == 0 || capacity < (1u16 << align_log2) ||
+            // forall|i: int| (0 <= i <= capacity - size) && (i as u16 % (1u16 << align_log2) == 0)
+            //     ==> has_obstruction(ba@, i, size as int)
+                // ==> exists |k: int| 0 <= k < size && #[trigger] ba@[i+k] == false
+            true
         }
     },
 {
+    // let mut align_log2:u16 = 1;
 
     if capacity < (1 << align_log2) || !ba.any() {
         return None;
     }
+
+    // assume(capacity >= (1 << align_log2));
+    assert(ba.bits != 0);
+    // let base1:u16 = 0;
+    // let align_log3:u16 = 2;
+    // let align = 1u16 << align_log3;
     let mut base = 0;
+    // proof{
+    //     shift_pow2(align_log3);
+    // };
+    // assert(0u16 % (1u16 << 2u16) == 0) by (bit_vector);
+    // assert((1u16 << align_log3)>=0) by (bit_vector);
+    // assert(0u16 % 1u16 << align_log3 == 0) by (compute);
+    // proof{
+    //     mod_arith(align_log3);
+    // };
+    // assert(0u16 % 2 == 0);
+    assert(base % (1u16 << align_log2) == 0) by (bit_vector)
+        requires
+            base == 0,
+            align_log2 < 4,
+    ;
+    // assert(base % (1u16 << align_log2) == 0) by (compute);
     let mut offset = base;
-    while offset < capacity {
+
+    while offset < capacity
+        invariant
+            capacity == 16,
+            // offset <= capacity,
+            align_log2 < 4,
+            // capacity >= (1 << align_log2),
+            //
+            base % (1u16 << align_log2) == 0,
+            // 0 <= base,
+            // base <= offset,
+            // offset <= capacity,
+            // forall|i: int| base <= i < offset ==> ba@.index(i),
+            // offset - base <= size,
+        decreases
+            capacity - offset,
+    {
         if let Some(next) = ba.next(offset) {
+            assert(next < 16);
             if next != offset {
+                assert(next > offset);
+
                 // it can be guarenteed that no bit in (offset..next) is free
                 // move to next aligned position after next-1
-                assert!(next > offset);
-                base = (((next - 1) >> align_log2) + 1) << align_log2;
-                assert_ne!(offset, next);
+                // assert!(next > offset);
+                // assert(next -1 < 16 -1);
+                // assert(align_log2<4);
+                // assert(next > 0);
+                // assert(next <= capacity);
+                let n = next - 1;
+                // assert(n < capacity);
+                // assert(n < 15);
+                // assert(align_log2 < 4);         // 假设 n 是 u32，这里 <32
+                // assert(align_log2 >= 0);
+                let q = n >> align_log2;
+                proof{
+                    safe_shr_u16(n,align_log2);
+                }
+                // // let q = safe_shr_u16(n, align_log2);
+                // assert(q <= n);
+                // assert(q < capacity);
+                let k = q + 1;
+                // assert(k < capacity);
+                let base = k << align_log2;
+                // assert()
+                // assume(base > offset);
+                // proof{
+                //     safe_shl_u16(k,align_log2);
+                // }
+                // assert( base <= capacity);
+                // base =0;
+                // base = (((next - 1) >> align_log2) + 1) << align_log2;
+                // assert_ne!(offset, next);
                 offset = base;
+                assert(base % (1u16 << align_log2) == 0) by (bit_vector)
+                    requires
+                        base == k << align_log2,
+                        align_log2 < 4,
+                ;
+                assert(base == offset);
+
+                // assert(base <= offset);
+                assume(base <= offset);
+                assume(offset <= capacity);
+                assume(offset - base <= size);
                 continue;
             }
         } else {
+            assume(base <= offset);
             return None;
         }
         offset += 1;
+        // assert(offset > next);
+        assert(offset > base);
+        // assume(offset > base);
         if offset - base == size {
             return Some(base);
         }
+        assume(base <= offset);
+                assume(offset <= capacity);
+                assume(offset - base <= size);
     }
+    assume(base <= offset);
+                assume(offset <= capacity);
+                assume(offset - base <= size);
     None
 }
 

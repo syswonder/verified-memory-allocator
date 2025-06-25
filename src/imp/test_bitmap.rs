@@ -232,7 +232,8 @@ mod tests {
         // assert_eq!(ba.next(0), Some(0));
         // assert_eq!(ba.alloc_contiguous(4, 0), Some(5));
 
-        ba.alloc_contiguous(16, 64);
+        ba.alloc_contiguous(4, 64);
+        assert_eq!(ba.alloc_contiguous(4, 5), None);
         // assert_eq!(find_contiguous(&ba, BitAlloc4K::CAP, 2, 0), Some(1));
 
         // for i in 0..16 {
