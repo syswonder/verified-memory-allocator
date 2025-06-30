@@ -17,7 +17,7 @@ macro_rules! get_bit16 {
 
 macro_rules! get_bits16_macro {
     ($a:expr, $st:expr, $ed:expr) => {{
-        let bitlen = 16;
+        let bitlen = 16u16;
         let bits = ($a << (bitlen - $ed)) >> (bitlen - $ed);
         bits >> $st
     }};
@@ -130,7 +130,7 @@ pub struct BitAlloc16 {
 }
 
 impl BitAlloc16 {
-    fn CAP() -> u16 {
+    fn cap(&self) -> u16 {
         16
     }
 
@@ -253,19 +253,44 @@ impl BitAlloc16 {
         Some(i)
     }
 
-    // fn alloc_contiguous(&mut self, size: u16, align_log2: u16) -> (res: Option<u32>)
-    // //如果成功，则分配了一段大小为size的空间，其它索引位的值保持不变；
-    // //新分配的索引base+size要小于16，并且get_bits(range)获取的值在该范围内的bit位都为1，alloc_contiguous之后都为0；
-
-    // //如果失败，则说明没有符合要求的空间，状态不变
-    // {
-    //     if let Some(base) = find_contiguous(self, Self::CAP, size, align_log2) {
-    //         self.remove(base..base + size);
-    //         Some(base)
-    //     } else {
-    //         None
-    //     }
-    // }
+    fn alloc_contiguous(&mut self, size: u16, align_log2: u16) -> (res: Option<u16>)
+    //如果成功，则分配了一段大小为size的空间，其它索引位的值保持不变；
+    //新分配的索引base+size要小于16，并且get_bits(range)获取的值在该范围内的bit位都为1，alloc_contiguous之后都为0；
+        requires
+            size > 0,
+            // size <= Self::CAP,
+            align_log2 < 4, // 0 <= align_log2 < 4
+        ensures match res {
+            Some(base) => {
+                //如果成功，则分配了一段大小为size的空间，其它索引位的值保持不变；
+                //新分配的索引base+size要小于等于16，并且get_bits(range)获取的值在该范围内的bit位都为1；
+                get_bits16!(self.bits, base as u16, (base + size) as u16) == 0 &&
+                forall|loc2: int|
+                    (0 <= loc2 < base || (base + size) <= loc2  < 16) ==> self@[loc2] == old(self)@[loc2]
+            },
+            None => {
+                //如果失败，则说明没有符合要求的空间，状态不变
+                // self.bits == 0 ||
+                self.bits == 0 ||
+                forall|i: int| (0 <= i <= (16u16 - size) as int) && (i as u16 % (1u16 << align_log2) == 0)
+                    ==> has_obstruction(self@, i, size as int)
+                    ==> exists |k: int| 0 <= k < size && #[trigger] self@[i+k] == false
+            }
+        },
+    //如果失败，则说明没有符合要求的空间，状态不变
+    {
+        // let capacity = self.cap();
+        // assert(capacity == 16);
+        // assert(self.cap() == 16);
+        if let Some(base) = find_contiguous(self, 16u16, size, align_log2) {
+            let start = base as u16;
+            let end = (base + size) as u16;
+            self.remove(start..end);
+            Some(base)
+        } else {
+            None
+        }
+    }
 
     fn dealloc(&mut self, key: u16)
     //释放前该索引位置得是0，释放后是1，其它索引位的值保持不变；
@@ -321,9 +346,10 @@ impl BitAlloc16 {
             range.end <= old(self)@.len(),
             range.start < range.end,
         ensures
-            get_bits16!(self.bits, range.start, range.end) == 0,
             forall|loc2: int|
-                (0 <= loc2 < range.start || range.end <= loc2  < 16) ==> self@[loc2] == old(self)@[loc2],
+                (0 <= loc2 < range.start || range.end <= loc2 < 16) ==> self@[loc2] == old(self)@[loc2],
+            get_bits16!(self.bits, range.start, range.end) == 0,
+
     {
         let value:u16 = 0;
         let width = range.end - range.start;
@@ -356,6 +382,7 @@ impl BitAlloc16 {
         ensures match res {
             Some(re) => {
                 // 如果成功，则返回第一个不小于key且没被占用的索引，key至res之间的索引位的值都为0，所有索引位的值保持不变；
+                self@[re as int] == true &&
                 re < self@.len() &&
                 re >= key &&
                 forall|i: int| key <= i < re ==> self@[i] == false
@@ -379,7 +406,7 @@ impl BitAlloc16 {
                 forall|k: int|
                     key <= k < i ==> self@[k] == false,
             ensures
-                (i == n && result.is_none()) ||  (i < n && result.is_some() && (result.unwrap() == i)),
+                (i == n && result.is_none()) ||  (i < n && result.is_some() && (result.unwrap() == i) && self@[i as int] == true),
             decreases
                 n-i,
         {
@@ -389,6 +416,7 @@ impl BitAlloc16 {
                 assert(i < n &&
                 i >= key &&
                 forall|k: int| key <= k < i ==> self@[k] == false);
+                assert(self@[i as int] == true);
                 break;
             }
             i += 1;
@@ -424,41 +452,32 @@ proof fn shift_pow2(x: u16) -> (r: u16)
     1u16 << x
 }
 
-// proof fn mod_arith(x: u16) -> (r: u16)
-//     requires x<16,
-//     ensures r == 0u16 % (1u16 << x) && r == 0
-// {
-//     let y = 1u16 << x;
-//     0u16 % y
-// }
-
-fn find_contiguous(ba: &mut BitAlloc16, capacity: u16, size: u16, align_log2: u16,) -> (res: Option<u16>)
+fn find_contiguous(ba: &BitAlloc16, capacity: u16, size: u16, align_log2: u16,) -> (res: Option<u16>)
     requires
         capacity == 16,
         align_log2 <4,
+        size > 0,
         // capacity >= (1 << align_log2),
-    ensures match res {
-        Some(re) => {
+    ensures
+
+    match res {
+        Some(base) => {
             //如果成功，则分配了一段大小为size的空间，其它索引位的值保持不变；
             //新分配的索引base+size要小于等于16，并且get_bits(range)获取的值在该范围内的bit位都为1；
-
-            // re + size <= capacity &&
-            // re % (1u16 << align_log2) == 0 &&
-            // forall|i: int| re <= i < re + size ==> ba@[i] == true //ba.next(i) != None
-            true
+            base + size <= capacity &&
+            base % (1u16 << align_log2) == 0 &&
+            forall|i: int| base <= i < base + size ==> ba@[i] == true //ba.next(i) != None
         },
         None => {
             //如果失败，则说明没有符合要求的空间
             //所有连续空间的内存小于要求分配的空间 || 连续空间的内存大于要求分配的空间但是不满足对齐
             //满足对齐时 连续空间的内存小于要求分配内存的空间
-
-            // ba.bits == 0 || capacity < (1u16 << align_log2) ||
-            // forall|i: int| (0 <= i <= capacity - size) && (i as u16 % (1u16 << align_log2) == 0)
-            //     ==> has_obstruction(ba@, i, size as int)
-                // ==> exists |k: int| 0 <= k < size && #[trigger] ba@[i+k] == false
-            true
+            ba.bits == 0 || capacity < (1u16 << align_log2) ||
+            forall|i: int| (0 <= i <= capacity - size) && (i as u16 % (1u16 << align_log2) == 0)
+                ==> has_obstruction(ba@, i, size as int)
+                ==> exists |k: int| 0 <= k < size && #[trigger] ba@[i+k] == false
         }
-    },
+    } && true
 {
     // let mut align_log2:u16 = 1;
 
@@ -489,94 +508,188 @@ fn find_contiguous(ba: &mut BitAlloc16, capacity: u16, size: u16, align_log2: u1
     ;
     // assert(base % (1u16 << align_log2) == 0) by (compute);
     let mut offset = base;
-
+    let mut res = None;
     while offset < capacity
         invariant
             capacity == 16,
-            // offset <= capacity,
             align_log2 < 4,
-            // capacity >= (1 << align_log2),
-            //
+            size > 0,
             base % (1u16 << align_log2) == 0,
-            // 0 <= base,
-            // base <= offset,
-            // offset <= capacity,
-            // forall|i: int| base <= i < offset ==> ba@.index(i),
-            // offset - base <= size,
+            0 <= base,
+            base <= offset,
+            offset <= capacity,
+            offset - base < size,
+            forall|i: int| base <= i < offset ==> ba@.index(i),
+        ensures
+            offset >= capacity || res == None::<u16> || (res == Some(base) && offset - base == size && (res.unwrap() == base) && forall|i: int| base <= i < base + size ==> ba@[i] == true)
         decreases
             capacity - offset,
     {
         if let Some(next) = ba.next(offset) {
             assert(next < 16);
+            assert(offset - base < size);
+            assert(next >= offset);
+            // assert(next < ba@.len() &&
+            //         next >= offset &&
+            //         forall|i: int| offset <= i < next ==> ba@[i] == false &&
+            //         ba@[next as int] == true);
+            assert(ba@[next as int] == true);
             if next != offset {
                 assert(next > offset);
-
+                assert(offset<=capacity);
                 // it can be guarenteed that no bit in (offset..next) is free
                 // move to next aligned position after next-1
-                // assert!(next > offset);
-                // assert(next -1 < 16 -1);
-                // assert(align_log2<4);
-                // assert(next > 0);
-                // assert(next <= capacity);
-                let n = next - 1;
-                // assert(n < capacity);
-                // assert(n < 15);
-                // assert(align_log2 < 4);         // 假设 n 是 u32，这里 <32
-                // assert(align_log2 >= 0);
-                let q = n >> align_log2;
+                assert(next > 0);
+                assert(((next - 1u16) as u16) >= 0);
                 proof{
-                    safe_shr_u16(n,align_log2);
+                    safe_shr_u16(((next - 1u16) as u16),align_log2);
                 }
-                // // let q = safe_shr_u16(n, align_log2);
-                // assert(q <= n);
-                // assert(q < capacity);
-                let k = q + 1;
-                // assert(k < capacity);
-                let base = k << align_log2;
-                // assert()
-                // assume(base > offset);
-                // proof{
-                //     safe_shl_u16(k,align_log2);
-                // }
-                // assert( base <= capacity);
-                // base =0;
-                // base = (((next - 1) >> align_log2) + 1) << align_log2;
-                // assert_ne!(offset, next);
+                base = (((((next - 1u16) as u16) >> align_log2) + 1u16) as u16) << align_log2;
+                // (((next - 1) >> align_log2) + 1) << align_log2 >= next
+                // 新的base要大于旧的base
+                proof{
+                    up_align2(next, align_log2);
+                }
+                assert(base >= next);
                 offset = base;
+                assert(offset >= next); // decreases
                 assert(base % (1u16 << align_log2) == 0) by (bit_vector)
                     requires
-                        base == k << align_log2,
+                        base == (((((next - 1u16) as u16) >> align_log2) + 1u16) as u16) << align_log2,
                         align_log2 < 4,
                 ;
                 assert(base == offset);
-
-                // assert(base <= offset);
-                assume(base <= offset);
-                assume(offset <= capacity);
-                assume(offset - base <= size);
+                proof{
+                    up_align2_max(next,align_log2);
+                }
+                assert(base <= capacity);
+                assert(base == offset);
+                assert(offset - base < size);
                 continue;
             }
+            assert(offset == next);
+
         } else {
-            assume(base <= offset);
             return None;
         }
+        assert(size > 0);
+        assert(offset - base < size);
         offset += 1;
-        // assert(offset > next);
         assert(offset > base);
-        // assume(offset > base);
         if offset - base == size {
-            return Some(base);
+            assert(offset - base == size);
+            assert(base + size == offset);
+            res = Some(base);
+            return res;
         }
-        assume(base <= offset);
-                assume(offset <= capacity);
-                assume(offset - base <= size);
+
     }
-    assume(base <= offset);
-                assume(offset <= capacity);
-                assume(offset - base <= size);
     None
 }
 
+//在不溢出的前提下，一个数右移再左移小于等于他本身
+// #[verifier::bit_vector]
+// proof fn right_left_shift(next:u16, align_log2:u16)
+//     requires 0 <= next < 16, align_log2 < 4,
+//     ensures (next >> align_log2) << align_log2 <= next
+// {
+// }
+
+// //在不溢出的前提下，一个数左移加法满足分配律
+// #[verifier::bit_vector]
+// proof fn word_shiftl_add_distrib(next:u16, align_log2:u16)
+//     requires 0 <= next < 16, align_log2 < 4,
+//     ensures ((next + 1u16) as u16) << align_log2 == (next << align_log2) + (1u16 << align_log2)
+// {
+// }
+
+// //在不溢出的前提下，一个数减法满足分配律
+// #[verifier::bit_vector]
+// proof fn word_shiftl_sub_distrib(next:u16, align_log2:u16)
+//     requires 0 < next < 16, align_log2 < 4,
+//     ensures ((next - 1u16) as u16) << align_log2 == (next << align_log2) - (1u16 << align_log2)
+// {
+// }
+
+//
+// #[verifier::bit_vector]
+// proof fn up_align(next:u16, align_log2:u16)
+//     requires 0 < next < 16, align_log2 < 4,
+//     ensures (next >> align_log2) + 1 >= ((next - 1u16) as u16) >> align_log2
+// {
+// }
+
+// //
+// #[verifier::bit_vector]
+// proof fn up_align1(next:u16, align_log2:u16)
+//     requires 0 < next < 16, align_log2 < 4,
+//     ensures (((next >> align_log2) + 1u16) as u16) << align_log2 >= ((next - 1u16) as u16)
+// {
+// }
+
+//向上对齐后的值 >= 原有的值
+#[verifier::bit_vector]
+proof fn up_align2(next:u16, align_log2:u16)
+    requires 0 < next < 16, align_log2 < 4,
+    ensures (((((next - 1u16) as u16) >> align_log2) + 1u16) as u16) << align_log2 >= next
+{
+}
+
+//向上对齐后的值 <= 原有值可能的最大值（该最大值大于等于 1 << align_log2)
+// #[verifier::bit_vector]
+proof fn up_align2_max(next:u16, align_log2:u16)
+    requires 0 < next < 16, align_log2 < 4,
+    ensures (((((next - 1u16) as u16) >> align_log2) + 1u16) as u16) << align_log2 <= 16
+{
+    // assert(0 < next < 16);
+    assert( (next >> align_log2) < (16 >> align_log2) ) by (bit_vector)
+        requires
+            0 < next < 16,
+            align_log2 < 4,
+    ;
+
+    assert((1u16 >> align_log2) <= (1u16)) by (bit_vector);
+    // assume((next >> align_log2 - 1u16) >= 0);
+    assert(((next >> align_log2) - (1u16 >> align_log2)) <= ((16u16 >> align_log2) - 1u16)) by (bit_vector)
+        requires
+            0 < next < 16,
+            align_log2 < 4,
+    ;
+    // assert(((next >> align_log2) - (1u16 >> align_log2)) == (((next - 1u16) as u16) >> align_log2)) by (bit_vector)
+    // requires
+    // 0 < next < 16,
+    // align_log2 < 4,
+    // ;
+    assert((((next - 1u16) as u16) >> align_log2) <= ((16u16 >> align_log2) - 1u16)) by (bit_vector)
+    requires
+    0 < next < 16,
+    align_log2 < 4,
+    ;
+    assert((((((next - 1u16) as u16) >> align_log2) + 1u16) as u16) << align_log2 <= 16) by (bit_vector)
+    requires
+    0 < next < 16,
+    align_log2 < 4,
+    ;
+}
+
+
+
+// #[verifier::bit_vector]
+// proof fn right_left_shift1(next:u16, align_log2:u16)
+//     requires 1 <= next < 16, align_log2 < 4,
+//     ensures (((next-1) as u16 >> align_log2) << align_log2 <= (next-1) as u16) by {
+//         right_left_shift((next - 1) as u16, align_log2);
+//     }
+// {
+//     // // assume(false);
+//     // assert((next - 1)>=0);
+//     // // proof{
+//     // //     right_left_shift((next - 1), align_log2);
+//     // // }
+//     // assert(((next-1) as u16 >> align_log2) << align_log2 <= (next-1) as u16) by {
+//     //     right_left_shift((next - 1) as u16, align_log2);
+//     // }
+// }
 
 }
 #[verifier::external]
