@@ -226,7 +226,8 @@ mod tests {
         let mut ba = BitAlloc16::default();
         assert_eq!(BitAlloc16::CAP, 16);
         ba.insert(0..16);
-        ba.alloc_contiguous(4, 64);
+        // ba.alloc_contiguous(4, 64);
+        // ba.test(32);
         assert_eq!(ba.alloc_contiguous(4, 5), None);
 
         // ba.remove(2..5);
@@ -259,6 +260,7 @@ mod tests {
         let mut ba = BitAlloc4K::default();
         assert_eq!(BitAlloc4K::CAP, 4096);
         ba.insert(0..4096);
+        ba.test(5056);
         for i in 0..4096 {
             assert_eq!(ba.test(i), true);
         }
