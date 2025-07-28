@@ -78,9 +78,10 @@ macro_rules! set_bits16 {
 }
 
 verus! {
+    global layout usize is size == 8;
 
 /// Converts a u16 value into a sequence of boolean bits.
-spec fn u16_view(u: u16) -> Seq<bool> {
+pub open spec fn u16_view(u: u16) -> Seq<bool> {
     Seq::new(16, |i: int| get_bit16!(u, i as u16))
 }
 
@@ -126,48 +127,86 @@ proof fn get_bits_u16_correctness(bv_gets: u16, bits: u16, st:u16, ed:u16)
 }
 
 /// Proof that if a u16 value is non-zero, its `trailing_zeros()` count must be less than 16.
-pub proof fn prove_nonzero_has_trailing_zeros(bits: u16)
-    requires bits != 0,
-    ensures bits.trailing_zeros() < 16,
-{
-}
+// pub proof fn prove_nonzero_has_trailing_zeros(bits: usize)
+//     requires bits != 0,
+//     ensures bits.trailing_zeros() < usize::BITS,
+// {
+// }
 
 /// Allocator of a bitmap, able to allocate / free bits.
 pub trait BitAlloc{
+    /// Specification function to view the internal u16 as a sequence of booleans.
+    spec fn view(&self) -> Seq<bool> ;
+
     /// The bitmap has a total of CAP bits, numbered from 0 to CAP-1 inclusively.
     fn cap(&self) -> (res:usize)
         ensures res == self.spec_cap();
 
-    spec fn spec_cap(&self) -> (res:usize);
+    spec fn spec_cap(&self) -> (res: usize);
 
 
     /// The default value. Workaround for `const fn new() -> Self`.
     fn default() -> Self where Self: Sized;
 
-    // /// Allocate a free bit.
-    // fn alloc(&mut self) -> Option<usize>;
+    /// Allocate a free bit.
+    fn alloc(&mut self) -> Option<usize>;
 
     // /// Allocate a free block with a given size, and return the first bit position.
     // fn alloc_contiguous(&mut self, size: usize, align_log2: usize) -> Option<usize>;
 
-    // /// Find a index not less than a given key, where the bit is free.
-    // fn next(&self, key: usize) -> Option<usize>;
+    /// Find a index not less than a given key, where the bit is free.
+    fn next(&self, key: usize) -> (res: Option<usize>)
+        requires
+            key < self.spec_cap(),
+        ensures match res {
+            Some(re) => {
+                // If successful, returns the first free index `re` that is not less than `key`.
+                // All indices between `key` and `re` (exclusive) must be allocated (false).
+                &&& self@[re as int] == true
+                &&& re < self.spec_cap()
+                &&& re >= key
+                &&& forall|i: int| key <= i < re ==> self@[i] == false
+            },
+            None => {
+                // If failed, all indices from `key` to the end are allocated (false).
+                forall|i: int| key <= i < self.spec_cap() ==> self@[i] == false
+            }
+        },
+    ;
 
-    // /// Free an allocated bit.
-    // fn dealloc(&mut self, key: usize);
+    /// Free an allocated bit.
+    fn dealloc(&mut self, key: usize)
+        requires
+            key < old(self).spec_cap(),
+    ;
 
-    // /// Mark bits in the range as unallocated (available)
-    // fn insert(&mut self, range: Range<usize>);
+    /// Mark bits in the range as unallocated (available)
+    fn insert(&mut self, range: Range<usize>)
+        requires
+            range.start < old(self).spec_cap(),
+            range.end <= old(self).spec_cap(),
+            range.start < range.end,
+    ;
 
-    // /// Reverse of insert
-    // fn remove(&mut self, range: Range<usize>);
+    /// Reverse of insert
+    fn remove(&mut self, range: Range<usize>)
+        requires
+            range.start < old(self).spec_cap(),
+            range.end <= old(self).spec_cap(),
+            range.start < range.end,
+    ;
 
     /// Whether there are free bits remaining
-    fn any(&self) -> bool;
+    fn any(&self) -> (res:bool)
+        ensures res == self.spec_any();
+
+    spec fn spec_any(&self) -> bool;
 
     /// Whether a specific bit is free
-    fn test(&self, index: usize) -> bool
-        requires index < self.spec_cap();
+    fn test(&self, key: usize) -> bool
+        requires
+            key < self.spec_cap(),
+    ;
 }
 
 /// Represents a 16-bit bitmap allocator.
@@ -176,12 +215,6 @@ pub struct BitAlloc16 {
 }
 
 impl BitAlloc16 {
-    /// Specification function to view the internal u16 as a sequence of booleans.
-    spec fn view(&self) -> Seq<bool> {
-        let width = 16;
-        Seq::new(width, |i: int| u16_view(self.bits@)[i])
-    }
-
     /// Gets the boolean value of a specific bit at `index`.
     fn get_bit(&self, index: u16) -> (bit: bool)
         requires
@@ -190,6 +223,7 @@ impl BitAlloc16 {
             bit == self@[index as int],
     {
         let bit_index: u16 = index % 16;
+
         get_bit16_macro!(self.bits, bit_index as u16)
     }
 
@@ -258,6 +292,12 @@ impl BitAlloc16 {
 }
 
 impl BitAlloc for BitAlloc16 {
+    /// Specification function to view the internal u16 as a sequence of booleans.
+    open spec fn view(&self) -> Seq<bool> {
+        let width = 16;
+        Seq::new(width, |i: int| u16_view(self.bits@)[i])
+    }
+
     /// The maximum capacity of the bitmap (16 bits).
     fn cap(&self) -> usize {
         16
@@ -272,19 +312,95 @@ impl BitAlloc for BitAlloc16 {
         BitAlloc16 { bits: 0 }
     }
 
+    /// Allocates a single free bit (represented by 1) and sets it to 0 (allocated).
+    /// Returns `Some(index)` if successful, `None` if no free bits are available.
+    fn alloc(&mut self) -> (res: Option<usize>)
+        ensures match res {
+            Some(i) => {
+                // If successful, a previously free index `i` is now allocated (set to false).
+                // Other indices remain unchanged.
+                self@ == old(self)@.update(i as int, false)
+            },
+            None => {
+                // If failed, all bits were already allocated (self.bits is 0), and the state is unchanged.
+                self.bits == 0
+            },
+        },
+    {
+        if !self.any() {
+            return None;
+        }
+        // Find the first free bit (least significant 1-bit).
+        let i = self.bits.trailing_zeros() as u16;
+        assert(i < u16::BITS) by{
+            assert(self.bits != 0); // Prove that if self.bits != 0, trailing_zeros() < 16.
+        };
 
+        let bv_old: u16 = self.bits;
+        let bv_new: u16 = set_bit16_macro!(bv_old, i, false);
+        proof {
+            set_bit_u16_preserves_others(bv_new, bv_old, i, false);
+        }
+        ;
+        self.bits = bv_new;
+        proof {
+            assert_seqs_equal!(
+                self.view(),
+                old(self).view().update(i as int, false)
+            );
+        }
+        Some(i as usize)
+    }
 
+    /// Deallocates a single bit at `index` by setting it to 1 (free).
+    fn dealloc(&mut self, index: usize)
+        ensures
+            self@ == old(self)@.update(index as int, true),
+    {
+        self.set_bit(index as u16, true);
+    }
 
+    /// Marks a range of bits as free (sets them to 1).
+    fn insert(&mut self, range: Range<usize>)
+        ensures
+            get_bits16!(self.bits, range.start as u16, range.end as u16) == (0xffffu16 >> (16 - (range.end as u16 - range.start as u16))),
+            forall|loc2: int|
+                (0 <= loc2 < range.start || range.end <= loc2  < 16) ==> self@[loc2] == old(self)@[loc2],
+    {
+        let width = (range.end - range.start) as u16;
+        let insert_val = 0xffffu16 >> (16 - width);
 
+        // Proof that insert_val's higher (16 - width) bits are zero.
+        assert((0xffffu16 >> (16 - width) as u16) << ((u16::BITS) as u16 - width) as u16 >>
+        ((u16::BITS) as u16 - width) as u16 == (0xffffu16 >> (16 - width) as u16)) by (bit_vector);
+        let range_u16 = (range.start as u16)..(range.end as u16);
+        self.set_bits(range_u16, insert_val);
+    }
 
+    /// Marks a range of bits as allocated (sets them to 0).
+    fn remove(&mut self, range: Range<usize>)
+        ensures
+            forall|loc2: int|
+                (0 <= loc2 < range.start || range.end <= loc2 < 16) ==> self@[loc2] == old(self)@[loc2],
+            get_bits16!(self.bits, range.start as u16, range.end as u16) == 0,
 
+    {
+        let value:u16 = 0;
+        let width:u16 = (range.end - range.start) as u16;
+        assert(((u16::BITS) as u16 - width) >= 0);
+        assert(0u16 << ((u16::BITS) as u16 - width) as usize >>
+        ((u16::BITS) as u16 - width) as usize == 0u16) by (bit_vector);
+        let range_u16 = (range.start as u16)..(range.end as u16);
+        self.set_bits(range_u16, value);
+    }
 
     /// Checks if there are any free bits (bits set to 1) in the bitmap.
-    fn any(&self) -> (res:bool)
-        ensures
-            res == (self.bits as u16 != 0),
-    {
-        self.bits as u16 != 0
+    fn any(&self) -> (res:bool){
+        self.bits != 0
+    }
+
+    open spec fn spec_any(&self) -> bool{
+        self.bits != 0
     }
 
     /// Tests if a specific bit at `index` is free (1) or allocated (0).
@@ -295,145 +411,222 @@ impl BitAlloc for BitAlloc16 {
         // let bit_index = (index % 16) as u16;
         self.get_bit(index as u16)
     }
+
+    /// Finds the next free bit (1) starting from `key` (inclusive).
+    /// Returns `Some(index)` of the next free bit, or `None` if no free bits are found.
+    fn next(&self, key: usize) -> (res: Option<usize>){
+        let n = u16::BITS as u16;
+        let mut result = None;
+        let mut i = key as u16;
+        assert(i<n);
+        while i < n
+            invariant_except_break
+                result.is_none(),
+            invariant
+                key <= i <= n,
+                n == self.spec_cap(),
+                forall|k: int|
+                    key <= k < i ==> self@[k] == false,
+            ensures
+                (i == n && result.is_none()) ||  (i < n && result.is_some() && (result.unwrap() == i as usize) && self@[i as int] == true),
+            decreases
+                n-i,
+        {
+            if self.get_bit(i) {
+                result = Some(i as usize);
+                break;
+            }
+            i += 1;
+        }
+        result
+    }
 }
 
 /// Specification function to check if a contiguous block starting at `i` of `size` contains any allocated bits (false).
-spec fn has_obstruction(ba: Seq<bool>, i: int, size: int) -> bool {
-    exists |k: int| 0 <= k < size && #[trigger] ba[i + k] == false
+/// or `i` is not a multiple of `align`
+spec fn has_obstruction(ba: Seq<bool>, i: int, size: int, align: int) -> bool {
+    (i % align != 0) ||
+    exists |k: int| i <= k < i + size && #[trigger] ba[k] == false
 }
 
 #[verifier::bit_vector]
-proof fn safe_shr_u16_lemma(x: u16, shift: u16)
-    requires shift < 16
+proof fn safe_shr_lemma(x: usize, shift: usize)
+    requires shift < 64
     ensures (x >> shift) <= x,
 {
 }
 
 /// Finds a contiguous block of `size` free bits within the bitmap, respecting `align_log2`.
 /// Returns the base index of the found block, or `None` if no such block exists.
-// fn find_contiguous(ba: &BitAlloc16, capacity: u16, size: u16, align_log2: u16,) -> (res: Option<u16>)
-//     requires
-//         capacity == 16,
-//         align_log2 <= 4,
-//         size > 0,
-//     ensures
-//     match res {
-//         Some(base) => {
-//             // If successful, a block of `size` free bits is found starting at `base`.
-//             // The block must be within capacity, aligned, and all bits within the block must be free (true).
-//             &&& base + size <= capacity
-//             &&& base % (1u16 << align_log2) == 0
-//             &&& forall|i: int| base <= i < base + size ==> ba@[i] == true //ba.next(i) != None
-//         },
-//         None => {
-//             // If failed, no suitable block exists.
-//             // This implies either no free bits, or all potential blocks are obstructed or misaligned.
-//             ba.bits == 0 || capacity < (1u16 << align_log2) ||
-//             forall|i: int| (0 <= i <= capacity - size) && (i as u16 % (1u16 << align_log2) == 0)
-//                 ==> has_obstruction(ba@, i, size as int)
-//                 ==> exists |k: int| 0 <= k < size && #[trigger] ba@[i+k] == false
-//         }
-//     }
-// {
-//     if capacity < (1 << align_log2) || !ba.any() {
-//         return None;
-//     }
+fn find_contiguous(ba: &impl BitAlloc, capacity: usize, size: usize, align_log2: usize) -> (res: Option<usize>)
+    requires
+        capacity == ba.spec_cap(),
+        align_log2 < 64,
+        0 < size <= capacity,
+        capacity < 0x10000,
+        capacity % (1usize << align_log2) == 0,
+    ensures
+        match res {
+            Some(base) => {
+                // If successful, a block of `size` free bits is found starting at `base`.
+                // The block must be within capacity, aligned, and all bits within the block must be free (true).
+                &&& base + size <= capacity
+                &&& base % (1usize << align_log2) == 0
+                &&& forall|i: int| base <= i < base + size ==> ba@[i] == true //ba.next(i) != None
+            },
+            None => {
+                // If failed, no suitable block exists.
+                // This implies either no free bits, or all potential blocks are obstructed or misaligned.
+                capacity < (1usize << align_log2) || !ba.spec_any() ||
+                forall|i: int| (0 <= i <= capacity - size) ==> has_obstruction(ba@, i, size as int,(1usize << align_log2) as int)
+            }
+        }
+{
+    // assert(capacity==16);
+    assert(capacity == ba.spec_cap());
+    if (capacity < (1usize << align_log2)) || !ba.any() {
+        return None;
+    }
+    assert(capacity >= (1usize << align_log2));
+    assert(ba.spec_any() == true);
+    let mut base:usize = 0;
+    // Proof that initial base (0) is aligned.
+    assert(base % (1usize << align_log2) == 0) by (bit_vector)
+        requires
+            base == 0,
+            align_log2 < 64,
+    ;
 
-//     assert(ba.bits != 0);
-//     let mut base = 0;
-//     // Proof that initial base (0) is aligned.
-//     assert(base % (1u16 << align_log2) == 0) by (bit_vector)
-//         requires
-//             base == 0,
-//             align_log2 <= 4,
-//     ;
+    let mut offset:usize = base;
+    let mut res:Option<usize> = None;
+    while offset < capacity
+        invariant
+            capacity < 0x10000,
+            capacity % (1usize << align_log2) == 0,
+            capacity >= (1usize << align_log2),
+            offset <= capacity,
+            offset - base < size,
+            forall|i: int| (0 <= i < base) ==> has_obstruction(ba@, i, size as int, (1usize << align_log2) as int),
+            forall|i: int| (0 <= i < capacity) && (i % (1usize << align_log2) as int != 0) ==> has_obstruction(ba@, i, size as int, (1usize << align_log2) as int),
+            capacity == ba.spec_cap(),
+            align_log2 < 64,
+            0 < size <= capacity,
+            0 <= base <= offset,
+            base % (1usize << align_log2) == 0,
+            forall|i: int| base <= i < offset ==> ba@.index(i),
+        decreases
+            capacity - offset,
+    {
+        if let Some(next) = ba.next(offset) {
+            assert(next < ba.spec_cap());
+            assert(offset - base < size);
+            assert(next >= offset);
+            assert(ba@[next as int] == true);
+            if next != offset {
+                assert(next > offset);
+                assert(offset<=capacity);
+                // it can be guarenteed that no bit in (offset..next) is free
+                // move to next aligned position after next-1
+                assert(next > 0);
 
-//     let mut offset = base;
-//     let mut res = None;
-//     while offset < capacity
-//         invariant
-//             capacity == 16,
-//             align_log2 <= 4,
-//             size > 0,
-//             base % (1u16 << align_log2) == 0,
-//             0 <= base,
-//             base <= offset,
-//             offset <= capacity,
-//             offset - base < size,
-//             forall|i: int| base <= i < offset ==> ba@.index(i),
-//         ensures
-//             offset >= capacity || res == None::<u16> || (res == Some(base) && offset - base == size && (res.unwrap() == base) && forall|i: int| base <= i < base + size ==> ba@[i] == true)
-//         decreases
-//             capacity - offset,
-//     {
-//         if let Some(next) = ba.next(offset) {
-//             assert(next < 16);
-//             assert(offset - base < size);
-//             assert(next >= offset);
-//             assert(ba@[next as int] == true);
-//             if next != offset {
-//                 assert(next > offset);
-//                 assert(offset<=capacity);
-//                 // it can be guarenteed that no bit in (offset..next) is free
-//                 // move to next aligned position after next-1
-//                 assert(next > 0);
-//                 assert(((next - 1u16) as u16) >= 0);
-//                 proof{
-//                     safe_shr_u16_lemma(((next - 1u16) as u16),align_log2);
-//                 }
-//                 base = (((((next - 1u16) as u16) >> align_log2) + 1u16) as u16) << align_log2;
-//                 // (((next - 1) >> align_log2) + 1) << align_log2 >= next
-//                 proof{
-//                     lemma_up_align_ge_original(next, align_log2);
-//                 }
-//                 assert(base >= next);
-//                 offset = base;
-//                 assert(offset >= next); // decreases
-//                 assert(base % (1u16 << align_log2) == 0) by (bit_vector)
-//                     requires
-//                         base == (((((next - 1u16) as u16) >> align_log2) + 1u16) as u16) << align_log2,
-//                         align_log2 <= 4,
-//                 ;
-//                 proof{
-//                     lemma_up_align_le_capacity(next,align_log2);
-//                 }
-//                 assert(base <= capacity);
-//                 assert(offset - base < size);
-//                 continue;
-//             }
-//             assert(offset == next);
+                assert(ba@[offset as int] == false);
+                assert(forall|i: usize| (offset - size < i <= offset) ==> has_obstruction(ba@, i as int, size as int, (1usize << align_log2) as int));
 
-//         } else {
-//             // No more free bits found from `offset` to `capacity`.
-//             return None;
-//         }
-//         assert(size > 0);
-//         assert(offset - base < size);
-//         offset += 1;
-//         assert(offset > base);
-//         if offset - base == size {
-//             assert(offset - base == size);
-//             assert(base + size == offset);
-//             res = Some(base);
-//             return res;
-//         }
-//     }
-//     None
-// }
+                assert(((next - 1) as usize) >= 0);
+                proof{
+                    safe_shr_lemma(((next - 1) as usize),align_log2);
+                }
+                base = (((((next - 1) as usize) >> align_log2) + 1) as usize) << align_log2;
+                proof{
+                    lemma_up_align_ge_original(next, capacity, align_log2);
+                }
+                assert(base >= next);
+
+                assert(forall|i: int| (offset <= i < next) ==> (ba@[i] == false));
+                // lemma_bit_false_implies_has_obstruction(ba@,);
+                assert forall|i: usize| (offset <= i < next) implies has_obstruction(ba@, i as int, size as int, (1usize << align_log2) as int) by{
+                    assert(ba@[i as int] == false);
+                }
+
+                offset = base;
+                assert(offset >= next); // decreases
+                assert(base % (1usize << align_log2) == 0) by (bit_vector)
+                    requires
+                        base == (((((next - 1) as usize) >> align_log2) + 1) as usize) << align_log2,
+                        align_log2 < 64,
+                        capacity < 0x10000,
+                        0 < next < capacity,
+                        (1usize << align_log2) <= capacity,
+                ;
+                proof{
+                    lemma_up_align_le_capacity(next, capacity, align_log2);
+                }
+                assert(base <= capacity);
+                assert(offset - base < size);
+                assert forall|i: usize| (next <= i < base) implies has_obstruction(ba@, i as int, size as int, (1usize << align_log2) as int) by{
+                    assert(i % (1usize << align_log2) != 0) by (bit_vector)
+                        requires
+                            next <= i < base,
+                            0 < next <= base,
+                            base == (((((next - 1) as usize) >> align_log2) + 1) as usize) << align_log2,
+                            base <= capacity,
+                            align_log2 < 64,
+                            capacity < 0x10000,
+                            (1usize << align_log2) <= capacity,
+                    ;
+                }
+                continue;
+            }
+            assert(offset == next);
+
+        } else {
+            // No more free bits found from `offset` to `capacity`.
+            assert(ba@[offset as int] == false);
+            assert(forall|i: usize| (offset - size < i <= offset) ==> has_obstruction(ba@, i as int, size as int, (1usize << align_log2) as int));
+            assert forall|i: usize| (offset <= i < capacity) implies has_obstruction(ba@, i as int, size as int, (1usize << align_log2) as int) by{
+                assert(ba@[i as int] == false);
+            }
+            return None;
+        }
+        assert(size > 0);
+        assert(offset - base < size);
+        offset += 1;
+        assert(offset > base);
+        if offset - base == size {
+            assert(offset - base == size);
+            assert(base + size == offset);
+            res = Some(base);
+            return res;
+        }
+    }
+    None
+}
 
 /// Lemma to prove that aligning `next` upwards results in a value greater than or equal to `next`.
 #[verifier::bit_vector]
-proof fn lemma_up_align_ge_original(next:u16, align_log2:u16)
-    requires 0 < next < 16, align_log2 <= 4,
-    ensures (((((next - 1u16) as u16) >> align_log2) + 1u16) as u16) << align_log2 >= next
+proof fn lemma_up_align_ge_original(next:usize, capacity:usize, align_log2:usize)
+    requires
+        capacity < 0x10000,
+        0 < next < capacity,
+        align_log2 < 64,
+        (1usize << align_log2) <= capacity,
+    ensures
+        (((((next - 1) as usize) >> align_log2) + 1) as usize) << align_log2 >= next
 {
+    // assert(align_log2 <= 4);
 }
 
-/// Lemma to prove that aligning `next` upwards results in a value less than or equal to the capacity (16).
+// /// Lemma to prove that aligning `next` upwards results in a value less than or equal to the capacity (16).
 #[verifier::bit_vector]
-proof fn lemma_up_align_le_capacity(next:u16, align_log2:u16)
-    requires 0 < next < 16, align_log2 <= 4,
-    ensures (((((next - 1u16) as u16) >> align_log2) + 1u16) as u16) << align_log2 <= 16
+proof fn lemma_up_align_le_capacity(next:usize, capacity:usize, align_log2:usize)
+    requires
+        capacity <= 0x10000,
+        0 < next < capacity,
+        align_log2 < 64,
+        (1usize << align_log2) <= capacity,
+        capacity % (1usize << align_log2) == 0,
+    ensures
+        (((((next - 1usize) as usize) >> align_log2) + 1usize) as usize) << align_log2 <= capacity
 {
 }
 

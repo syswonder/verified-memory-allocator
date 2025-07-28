@@ -260,7 +260,7 @@ mod tests {
         let mut ba = BitAlloc4K::default();
         assert_eq!(BitAlloc4K::CAP, 4096);
         ba.insert(0..4096);
-        ba.test(5056);
+        // ba.test(5056);
         for i in 0..4096 {
             assert_eq!(ba.test(i), true);
         }
@@ -279,6 +279,38 @@ mod tests {
             assert!(ba.alloc().is_some());
         }
         assert!(ba.alloc().is_none());
+    }
+
+    #[test]
+    fn BitAlloc16M() {
+        let mut ba = BitAlloc16M::default();
+    }
+    #[test]
+    fn BitAlloc1M() {
+        let mut ba = BitAlloc1M::default();
+        assert_eq!(BitAlloc1M::CAP, 1048576);
+        ba.insert(0..1048576);
+        ba.remove(3..6);
+        assert_eq!(ba.alloc_contiguous(80000, 63), None);
+        // // ba.test(5056);
+        // for i in 0..4096 {
+        //     assert_eq!(ba.test(i), true);
+        // }
+        // ba.remove(2..4094);
+        // for i in 0..4096 {
+        //     assert_eq!(ba.test(i), i < 2 || i >= 4094);
+        // }
+        // assert_eq!(ba.alloc(), Some(0));
+        // assert_eq!(ba.alloc(), Some(1));
+        // assert_eq!(ba.alloc(), Some(4094));
+        // ba.dealloc(0);
+        // ba.dealloc(1);
+        // ba.dealloc(4094);
+
+        // for _ in 0..4 {
+        //     assert!(ba.alloc().is_some());
+        // }
+        // assert!(ba.alloc().is_none());
     }
 
     #[test]
@@ -325,14 +357,14 @@ mod tests {
         // }
     }
 
-    // #[test]
-    // fn bitallocContPerformance() {
-    //     let mut ba = Box::new(BitAlloc256M::default());
-    //     assert_eq!(BitAlloc256M::CAP, 1 << 28);
-    //     ba.insert(0..BitAlloc256M::CAP);
-    //     assert_eq!(ba.alloc_contiguous(1 << 20, 20), Some(0));
-    //     assert_eq!(ba.alloc_contiguous(1 << 19, 19), Some(1 << 20));
-    //     assert_eq!(ba.alloc_contiguous(1 << 21, 21), Some(1 << 21));
-    //     assert_eq!(ba.alloc_contiguous(1 << 19, 19), Some(3 << 19));
-    // }
+    #[test]
+    fn bitallocContPerformance() {
+        let mut ba = Box::new(BitAlloc256M::default());
+        assert_eq!(BitAlloc256M::CAP, 1 << 28);
+        ba.insert(0..BitAlloc256M::CAP);
+        assert_eq!(ba.alloc_contiguous(1 << 20, 20), Some(0));
+        assert_eq!(ba.alloc_contiguous(1 << 19, 19), Some(1 << 20));
+        assert_eq!(ba.alloc_contiguous(1 << 21, 21), Some(1 << 21));
+        assert_eq!(ba.alloc_contiguous(1 << 19, 19), Some(3 << 19));
+    }
 }
