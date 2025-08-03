@@ -200,105 +200,106 @@ impl BitAlloc16{
     //     ;
     // }
 }
-// pub struct BitMap {
-//     bits: Vec<usize>,
-// }
 
-// impl BitMap {
-    // fn fa() {
-    //     assert(usize::BITS == 32);
-    //     // assert(usize::BITS == 64);
+pub struct BitMap {
+    bits: Vec<usize>,
+}
 
-    //     // assert(usize::BITS == 1);
-    //     // assert(index == 10);
-    // }
-    // spec fn view(&self) -> Seq<bool> {
-    //     let width = self.bits@.len() * usize::BITS as nat;
-    //     Seq::new(width, |i: int| u64_view(self.bits@[(i / usize::BITS.try_into().unwrap()) as int])[(i % usize::BITS.try_into().unwrap()) as int])
-    // }
+impl BitMap {
+    fn fa() {
+        assert(usize::BITS == 32);
+        // assert(usize::BITS == 64);
 
-    // fn from(v: Vec<usize>) -> BitMap {
-    //     BitMap { bits: v }
-    // }
+        // assert(usize::BITS == 1);
+        // assert(index == 10);
+    }
+    spec fn view(&self) -> Seq<bool> {
+        let width = self.bits@.len() * usize::BITS as nat;
+        Seq::new(width, |i: int| u64_view(self.bits@[(i / usize::BITS.try_into().unwrap()) as int])[(i % usize::BITS.try_into().unwrap()) as int])
+    }
 
-    // fn get_bit(&self, index: usize) -> (bit: bool)
-    //     requires
-    //         index < self@.len(),
-    //     ensures
-    //         bit == self@[index as int],
-    // {
-    //     // REVIEW: at this moment, usize is assumed to be 32 or 64.
-    //     // Therefore, if `index` is usize, verification fails due to the possibility of truncation
-    //     // when we begin to consider `usize` smaller than 32, this might fail again.
+    fn from(v: Vec<usize>) -> BitMap {
+        BitMap { bits: v }
+    }
 
-    //     let seq_index: usize = index / usize::BITS;
-    //     let bit_index: usize = index % usize::BITS;
-    //     let bucket: usize = self.bits[seq_index];
+    fn get_bit(&self, index: usize) -> (bit: bool)
+        requires
+            index < self@.len(),
+        ensures
+            bit == self@[index as int],
+    {
+        // REVIEW: at this moment, usize is assumed to be 32 or 64.
+        // Therefore, if `index` is usize, verification fails due to the possibility of truncation
+        // when we begin to consider `usize` smaller than 32, this might fail again.
 
-    //     get_bit64_macro!(bucket, bit_index)
-    // }
+        let seq_index: usize = index / usize::BITS;
+        let bit_index: usize = index % usize::BITS;
+        let bucket: usize = self.bits[seq_index];
 
-    // fn set_bit(&mut self, index: usize, bit: bool)
-    //     requires
-    //         index < old(self)@.len(),
-    //     ensures
-    //         self@ == old(self)@.update(index as int, bit),
-    // {
-    //     // REVEIW: Same problem here with above regarding `usize`.
-    //     let seq_index: usize = index / usize::BITS;
-    //     let bit_index: usize = index % usize::BITS;
-    //     let bv_old: usize = self.bits[seq_index];
-    //     let bv_new: usize = set_bit64_macro!(bv_old, bit_index, bit);
-    //     proof {
-    //         set_bit64_proof(bv_new, bv_old, bit_index, bit);
-    //     }
-    //     ;
-    //     self.bits.set(seq_index, bv_new);
-    //     proof {
-    //         assert_seqs_equal!(
-    //             self.view(),
-    //             old(self).view().update(index as int, bit)
-    //         );
-    //     }
-    //     ;
-    // }
+        get_bit64_macro!(bucket, bit_index)
+    }
 
-    // bitwise-OR for bitmap
-    // fn or(&self, bm: &BitMap) -> (ret: BitMap)
-    //     requires
-    //         self@.len() == bm@.len(),
-    //     ensures
-    //         self@.len() == ret@.len(),
-    //         forall|i: int| 0 <= i < ret@.len() ==> ret@[i] == (self@[i] || bm@[i]),
-    // {
-    //     let n: usize = self.bits.len();
-    //     let mut i: usize = 0;
-    //     let mut res_bits: Vec<usize> = Vec::new();
-    //     let mut result = BitMap { bits: res_bits };
-    //     while i < n
-    //         invariant
-    //             i <= n,
-    //             n == self.bits@.len(),
-    //             n == bm.bits@.len(),
-    //             i == result.bits.len(),
-    //             forall|k: int|
-    //                 0 <= k < i ==> or_u64_relation(self.bits@[k], bm.bits@[k], result.bits@[k]),
-    //             forall|k: int| 0 <= k < i * 64 ==> result@[k] == (self@[k] || bm@[k]),
-    //     {
-    //         res_bits = result.bits;
-    //         let u1: usize = self.bits[i];
-    //         let u2: usize = bm.bits[i];
-    //         let or_int: usize = u1 | u2;
-    //         proof {
-    //             bit_or_64_view_proof(u1, u2, or_int);
-    //         }
-    //         res_bits.push(or_int);
-    //         result = BitMap { bits: res_bits };
-    //         i = i + 1;
-    //     }
-    //     result
-    // }
-// }
+    fn set_bit(&mut self, index: usize, bit: bool)
+        requires
+            index < old(self)@.len(),
+        ensures
+            self@ == old(self)@.update(index as int, bit),
+    {
+        // REVEIW: Same problem here with above regarding `usize`.
+        let seq_index: usize = index / usize::BITS;
+        let bit_index: usize = index % usize::BITS;
+        let bv_old: usize = self.bits[seq_index];
+        let bv_new: usize = set_bit64_macro!(bv_old, bit_index, bit);
+        proof {
+            set_bit64_proof(bv_new, bv_old, bit_index, bit);
+        }
+        ;
+        self.bits.set(seq_index, bv_new);
+        proof {
+            assert_seqs_equal!(
+                self.view(),
+                old(self).view().update(index as int, bit)
+            );
+        }
+        ;
+    }
+
+    bitwise-OR for bitmap
+    fn or(&self, bm: &BitMap) -> (ret: BitMap)
+        requires
+            self@.len() == bm@.len(),
+        ensures
+            self@.len() == ret@.len(),
+            forall|i: int| 0 <= i < ret@.len() ==> ret@[i] == (self@[i] || bm@[i]),
+    {
+        let n: usize = self.bits.len();
+        let mut i: usize = 0;
+        let mut res_bits: Vec<usize> = Vec::new();
+        let mut result = BitMap { bits: res_bits };
+        while i < n
+            invariant
+                i <= n,
+                n == self.bits@.len(),
+                n == bm.bits@.len(),
+                i == result.bits.len(),
+                forall|k: int|
+                    0 <= k < i ==> or_u64_relation(self.bits@[k], bm.bits@[k], result.bits@[k]),
+                forall|k: int| 0 <= k < i * 64 ==> result@[k] == (self@[k] || bm@[k]),
+        {
+            res_bits = result.bits;
+            let u1: usize = self.bits[i];
+            let u2: usize = bm.bits[i];
+            let or_int: usize = u1 | u2;
+            proof {
+                bit_or_64_view_proof(u1, u2, or_int);
+            }
+            res_bits.push(or_int);
+            result = BitMap { bits: res_bits };
+            i = i + 1;
+        }
+        result
+    }
+}
 
 } // verus!
 #[verifier::external]

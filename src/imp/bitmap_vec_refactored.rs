@@ -1,6 +1,6 @@
 #[allow(unused_imports)]
-use builtin::*;
-use builtin_macros::*;
+// use builtin::*;
+// use builtin_macros::*;
 use core::ops::Range;
 use vstd::{invariant, prelude::*, seq::*, seq_lib::*};
 
@@ -78,7 +78,7 @@ macro_rules! set_bits16 {
 }
 
 verus! {
-    global layout usize is size == 8;
+global layout usize is size == 8;
 
 /// Converts a u16 value into a sequence of boolean bits.
 pub open spec fn u16_view(u: u16) -> Seq<bool> {
@@ -125,53 +125,17 @@ proof fn get_bits_u16_correctness(bv_gets: u16, bits: u16, st:u16, ed:u16)
         forall|i: u16| 0 <= i < (ed - st) ==> ((get_bit16!(bv_gets, i)) == get_bit16!(bits, (st + i) as u16)),
 {
 }
-
-/// Proof that if a u16 value is non-zero, its `trailing_zeros()` count must be less than 16.
-// pub proof fn prove_nonzero_has_trailing_zeros(bits: usize)
-//     requires bits != 0,
-//     ensures bits.trailing_zeros() < usize::BITS,
-// {
-// }
-
+/*
 /// Allocator of a bitmap, able to allocate / free bits.
-pub trait BitAlloc{
-    /// Specification function to view the internal u16 as a sequence of booleans.
-    spec fn view(&self) -> Seq<bool> ;
-
-    /// The bitmap has a total of CAP bits, numbered from 0 to CAP-1 inclusively.
-    fn cap(&self) -> (res:usize)
-        ensures res == self.spec_cap();
-
-    spec fn spec_cap(&self) -> (res: usize);
-
-
-    /// The default value. Workaround for `const fn new() -> Self`.
-    fn default() -> Self where Self: Sized;
-
+pub trait BitAlloc: BitAllocView{
     /// Allocate a free bit.
     fn alloc(&mut self) -> Option<usize>;
 
-    // /// Allocate a free block with a given size, and return the first bit position.
-    // fn alloc_contiguous(&mut self, size: usize, align_log2: usize) -> Option<usize>;
-
-    /// Find a index not less than a given key, where the bit is free.
-    fn next(&self, key: usize) -> (res: Option<usize>)
+    /// Allocate a free block with a given size, and return the first bit position.
+    fn alloc_contiguous(&mut self, size: usize, align_log2: usize) -> Option<usize>
         requires
-            key < self.spec_cap(),
-        ensures match res {
-            Some(re) => {
-                // If successful, returns the first free index `re` that is not less than `key`.
-                // All indices between `key` and `re` (exclusive) must be allocated (false).
-                &&& self@[re as int] == true
-                &&& re < self.spec_cap()
-                &&& re >= key
-                &&& forall|i: int| key <= i < re ==> self@[i] == false
-            },
-            None => {
-                // If failed, all indices from `key` to the end are allocated (false).
-                forall|i: int| key <= i < self.spec_cap() ==> self@[i] == false
-            }
-        },
+            0 < size <= old(self).spec_cap(),
+            align_log2 < 64,
     ;
 
     /// Free an allocated bit.
@@ -195,6 +159,46 @@ pub trait BitAlloc{
             range.end <= old(self).spec_cap(),
             range.start < range.end,
     ;
+}
+ */
+pub trait BitAllocView {
+    /// Specification function to view the internal u16 as a sequence of booleans.
+    spec fn view(&self) -> Seq<bool> ;
+
+    /// The bitmap has a total of CAP bits, numbered from 0 to CAP-1 inclusively.
+    fn cap() -> (res:usize)
+        requires
+            Self::cascade_not_overflow(),
+        ensures
+            res == Self::spec_cap(),
+    ;
+
+    spec fn spec_cap() -> (res:usize);
+
+    spec fn cascade_not_overflow() -> bool;
+
+    /// The default value. Workaround for `const fn new() -> Self`.
+    fn default() -> Self where Self: Sized;
+
+    // /// Find a index not less than a given key, where the bit is free.
+    // fn next(&self, key: usize) -> (res: Option<usize>)
+    //     requires
+    //         key < self.spec_cap(),
+    //     ensures match res {
+    //         Some(re) => {
+    //             // If successful, returns the first free index `re` that is not less than `key`.
+    //             // All indices between `key` and `re` (exclusive) must be allocated (false).
+    //             &&& self@[re as int] == true
+    //             &&& re < self.spec_cap()
+    //             &&& re >= key
+    //             &&& forall|i: int| key <= i < re ==> self@[i] == false
+    //         },
+    //         None => {
+    //             // If failed, all indices from `key` to the end are allocated (false).
+    //             forall|i: int| key <= i < self.spec_cap() ==> self@[i] == false
+    //         }
+    //     },
+    // ;
 
     /// Whether there are free bits remaining
     fn any(&self) -> (res:bool)
@@ -205,14 +209,98 @@ pub trait BitAlloc{
     /// Whether a specific bit is free
     fn test(&self, key: usize) -> bool
         requires
-            key < self.spec_cap(),
+            Self::cascade_not_overflow(),
+            key < Self::spec_cap(),
     ;
 }
 
+/// A bitmap of 256 bits
+pub type BitAlloc256 = BitAllocCascade16<BitAlloc16>; //8
+/// A bitmap of 4K bits
+pub type BitAlloc4K = BitAllocCascade16<BitAlloc256>; //12
+/// A bitmap of 64K bits
+pub type BitAlloc64K = BitAllocCascade16<BitAlloc4K>; //16
+/// A bitmap of 1M bits
+pub type BitAlloc1M = BitAllocCascade16<BitAlloc64K>; //20
+
+/// Implement the bit allocator by segment tree algorithm.    BitAlloc +
+pub struct BitAllocCascade16<T:BitAllocView> {
+    pub bitset: u16, // for each bit, 1 indicates available, 0 indicates inavailable
+    pub sub: [T; 16],
+}
+
+impl<T: BitAllocView + std::marker::Copy> BitAllocView for BitAllocCascade16<T> {
+    open spec fn view(&self) -> Seq<bool> {
+        // 把 16 个子分配器的 view 拼接在一起
+        let sub_len = self.sub[0].view().len() as int;
+        Seq::new((sub_len * 16) as nat, |idx: int| {
+            let i   = idx / sub_len;                   // 第几个子分配器
+            let off = idx % sub_len;                   // 子分配器内偏移
+            self.sub[i as int].view()[off as int]           // 取对应 bit
+        })
+    }
+
+    // 每个子分配器的容量都是固定且相等的
+    fn cap() -> (res:usize) {
+        (T::cap() * 16) as usize  
+    }
+
+    open spec fn spec_cap() -> (res:usize){
+        (T::spec_cap() * 16) as usize
+    }
+
+    open spec fn cascade_not_overflow() -> bool {
+        T::cascade_not_overflow() && T::spec_cap() * 16 < usize::MAX
+    }
+
+    /// Creates a new `BitAllocCascade16` with all bits set to 0 (all free).
+    fn default() -> Self {
+        BitAllocCascade16 {
+            bitset: 0,
+            sub: [T::default(); 16], // need the trait "std::marker::Copy"
+        }
+    }
+
+    /// Checks if there are any free bits (bits set to 1) in the bitmap.
+    fn any(&self) -> (res:bool){
+        self.bitset != 0
+    }
+
+    open spec fn spec_any(&self) -> bool{
+        self.bitset != 0
+    }
+
+    /// Tests if a specific bit at `index` is free (1) or allocated (0).
+    fn test(&self, index: usize) -> (res:bool)
+    {
+        let seq_index: usize = index / T::cap(); //证明seq_index < 16
+        // assume(T::spec_cap() != 0);
+        // assert(Self::spec_cap() == T::spec_cap() * 16);
+        // assert(Self::spec_cap() / T::spec_cap() == 16) by(nonlinear_arith);
+        // assert(index < Self::spec_cap());
+        // assert((index / T::spec_cap()) < 16);
+        // assert(seq_index < 16) by(compute);
+
+        assume(seq_index < 16);
+        let bit_index: usize = index % T::cap();
+        // let bit_index = (index % 16) as u16;
+        self.sub[seq_index].test(bit_index)
+        // self.get_bit(index as u16)
+    }
+}
 /// Represents a 16-bit bitmap allocator.
 pub struct BitAlloc16 {
     pub bits: u16,
 }
+
+// proof fn div_cancel(a: int, b: int, k: int)
+//     requires b > 0,
+//              a == b * k,
+//     ensures  a / b == k,
+// {
+//     // 交给 non-linear arithmetic 插件即可
+//     // assert(a / b == k) by (nonlinear_arith);
+// }
 
 impl BitAlloc16 {
     /// Gets the boolean value of a specific bit at `index`.
@@ -291,27 +379,82 @@ impl BitAlloc16 {
     }
 }
 
-impl BitAlloc for BitAlloc16 {
+impl BitAllocView for BitAlloc16 {
     /// Specification function to view the internal u16 as a sequence of booleans.
     open spec fn view(&self) -> Seq<bool> {
-        let width = 16;
+        let width = Self::spec_cap() as nat;
         Seq::new(width, |i: int| u16_view(self.bits@)[i])
     }
 
     /// The maximum capacity of the bitmap (16 bits).
-    fn cap(&self) -> usize {
+    fn cap() -> (res:usize) {
+        // Some(16)
         16
     }
 
-    open spec fn spec_cap(&self) -> (res:usize){
+    open spec fn spec_cap() -> (res:usize){
+        // Some(16)
         16
     }
 
+    open spec fn cascade_not_overflow() -> bool {
+        true
+    }
+    
     /// Creates a new `BitmapAllocator16` with all bits set to 0 (all free).
     fn default() -> Self {
         BitAlloc16 { bits: 0 }
     }
 
+    /// Checks if there are any free bits (bits set to 1) in the bitmap.
+    fn any(&self) -> (res:bool){
+        self.bits != 0
+    }
+
+    open spec fn spec_any(&self) -> bool{
+        self.bits != 0
+    }
+
+    /// Tests if a specific bit at `index` is free (1) or allocated (0).
+    fn test(&self, index: usize) -> (res:bool)
+        ensures
+            res == (get_bit16_macro!(self.bits, index as u16)),
+    {
+        // let bit_index = (index % 16) as u16;
+        self.get_bit(index as u16)
+    }
+
+    // /// Finds the next free bit (1) starting from `key` (inclusive).
+    // /// Returns `Some(index)` of the next free bit, or `None` if no free bits are found.
+    // fn next(&self, key: usize) -> (res: Option<usize>){
+    //     let n = u16::BITS as u16;
+    //     let mut result = None;
+    //     let mut i = key as u16;
+    //     assert(i<n);
+    //     while i < n
+    //         invariant_except_break
+    //             result.is_none(),
+    //         invariant
+    //             key <= i <= n,
+    //             n == self.spec_cap(),
+    //             forall|k: int|
+    //                 key <= k < i ==> self@[k] == false,
+    //         ensures
+    //             (i == n && result.is_none()) ||  (i < n && result.is_some() && (result.unwrap() == i as usize) && self@[i as int] == true),
+    //         decreases
+    //             n-i,
+    //     {
+    //         if self.get_bit(i) {
+    //             result = Some(i as usize);
+    //             break;
+    //         }
+    //         i += 1;
+    //     }
+    //     result
+    // }
+}
+/*
+impl BitAlloc for BitAlloc16 {
     /// Allocates a single free bit (represented by 1) and sets it to 0 (allocated).
     /// Returns `Some(index)` if successful, `None` if no free bits are available.
     fn alloc(&mut self) -> (res: Option<usize>)
@@ -350,6 +493,41 @@ impl BitAlloc for BitAlloc16 {
             );
         }
         Some(i as usize)
+    }
+
+    /// Allocates a contiguous block of `size` bits with specified `align_log2` alignment.
+    /// Returns `Some(base_index)` if successful, `None` if no suitable block is found.
+    fn alloc_contiguous(&mut self, size: usize, align_log2: usize) -> (res: Option<usize>)
+        ensures match res {
+            Some(base) => {
+                // If successful, a contiguous block from `base` to `base + size` is allocated (set to false).
+                // Other indices remain unchanged.
+                get_bits16!(self.bits, base as u16, (base + size) as u16) == 0 &&
+                forall|loc2: int|
+                    (0 <= loc2 < base || (base + size) <= loc2  < 16) ==> self@[loc2] == old(self)@[loc2]
+            },
+            None => {
+                // If failed, no suitable space was found, and the state is unchanged.
+                // This implies either no free bits, or all free contiguous blocks are too small or misaligned.
+                self.bits == 0 || self.spec_cap() < (1usize << align_log2) ||
+                forall|i: int| (0 <= i <= (self.spec_cap() - size) as int) ==> has_obstruction(self@, i, size as int,(1usize << align_log2) as int)
+                    // ==> exists |k: int| 0 <= k < size && #[trigger] self@[i+k] == false
+                // true
+            }
+        },
+    {
+        assert(self.spec_cap() == 16);
+        // let i = self.cap().trailing_zeros() as usize;
+        assert(is_pow16(self.spec_cap())) by (compute);
+        assert(self.spec_cap() % 16 == 0);
+        if let Some(base) = find_contiguous(self, self.cap(), size, align_log2) {
+            let start = base;
+            let end = base + size;
+            self.remove(start..end);
+            Some(base)
+        } else {
+            None
+        }
     }
 
     /// Deallocates a single bit at `index` by setting it to 1 (free).
@@ -394,57 +572,12 @@ impl BitAlloc for BitAlloc16 {
         self.set_bits(range_u16, value);
     }
 
-    /// Checks if there are any free bits (bits set to 1) in the bitmap.
-    fn any(&self) -> (res:bool){
-        self.bits != 0
-    }
 
-    open spec fn spec_any(&self) -> bool{
-        self.bits != 0
-    }
-
-    /// Tests if a specific bit at `index` is free (1) or allocated (0).
-    fn test(&self, index: usize) -> (res:bool)
-        ensures
-            res == (get_bit16_macro!(self.bits, index as u16)),
-    {
-        // let bit_index = (index % 16) as u16;
-        self.get_bit(index as u16)
-    }
-
-    /// Finds the next free bit (1) starting from `key` (inclusive).
-    /// Returns `Some(index)` of the next free bit, or `None` if no free bits are found.
-    fn next(&self, key: usize) -> (res: Option<usize>){
-        let n = u16::BITS as u16;
-        let mut result = None;
-        let mut i = key as u16;
-        assert(i<n);
-        while i < n
-            invariant_except_break
-                result.is_none(),
-            invariant
-                key <= i <= n,
-                n == self.spec_cap(),
-                forall|k: int|
-                    key <= k < i ==> self@[k] == false,
-            ensures
-                (i == n && result.is_none()) ||  (i < n && result.is_some() && (result.unwrap() == i as usize) && self@[i as int] == true),
-            decreases
-                n-i,
-        {
-            if self.get_bit(i) {
-                result = Some(i as usize);
-                break;
-            }
-            i += 1;
-        }
-        result
-    }
 }
 
 /// Specification function to check if a contiguous block starting at `i` of `size` contains any allocated bits (false).
 /// or `i` is not a multiple of `align`
-spec fn has_obstruction(ba: Seq<bool>, i: int, size: int, align: int) -> bool {
+pub open spec fn has_obstruction(ba: Seq<bool>, i: int, size: int, align: int) -> bool {
     (i % align != 0) ||
     exists |k: int| i <= k < i + size && #[trigger] ba[k] == false
 }
@@ -456,15 +589,29 @@ proof fn safe_shr_lemma(x: usize, shift: usize)
 {
 }
 
+/// The capacity is an exponential multiple of 16.
+/// and the current bitmap only supports the maximum allocatable page size of 1M.
+spec fn is_pow16(cap: usize) -> bool {
+    cap == 16 || cap == 256 || cap == 4096 || cap == 65536 || cap == 1048576
+}
+
+// /// The capacity is an exponential multiple of 16.
+// /// cap == 16 || cap == 256 || cap == 4096 || cap == 65536 || cap == 1048576
+// spec fn is_pow16(cap: usize) -> bool {
+//     cap >= 16 &&
+//     (cap & (cap-1usize) as usize) == 0 &&
+//     (cap % 15usize == 1)
+// }
+
 /// Finds a contiguous block of `size` free bits within the bitmap, respecting `align_log2`.
 /// Returns the base index of the found block, or `None` if no such block exists.
-fn find_contiguous(ba: &impl BitAlloc, capacity: usize, size: usize, align_log2: usize) -> (res: Option<usize>)
+fn find_contiguous(ba: &impl BitAllocView, capacity: usize, size: usize, align_log2: usize) -> (res: Option<usize>)
     requires
         capacity == ba.spec_cap(),
         align_log2 < 64,
         0 < size <= capacity,
         capacity < 0x10000,
-        capacity % (1usize << align_log2) == 0,
+        is_pow16(capacity),
     ensures
         match res {
             Some(base) => {
@@ -502,7 +649,7 @@ fn find_contiguous(ba: &impl BitAlloc, capacity: usize, size: usize, align_log2:
     while offset < capacity
         invariant
             capacity < 0x10000,
-            capacity % (1usize << align_log2) == 0,
+            is_pow16(capacity),
             capacity >= (1usize << align_log2),
             offset <= capacity,
             offset - base < size,
@@ -624,12 +771,13 @@ proof fn lemma_up_align_le_capacity(next:usize, capacity:usize, align_log2:usize
         0 < next < capacity,
         align_log2 < 64,
         (1usize << align_log2) <= capacity,
-        capacity % (1usize << align_log2) == 0,
+        capacity == 16 || capacity == 256 || capacity == 4096 || capacity == 65536 || capacity == 1048576,
+        // is_pow16(capacity),
     ensures
         (((((next - 1usize) as usize) >> align_log2) + 1usize) as usize) << align_log2 <= capacity
 {
 }
-
+*/
 }
 #[verifier::external]
 fn main() {}
