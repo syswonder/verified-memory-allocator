@@ -190,7 +190,7 @@ fn find_contiguous(
     size: usize,
     align_log2: usize,
 ) -> Option<usize> {
-    if capacity < (1 << align_log2) || !ba.any() {
+    if align_log2 >= 64 || capacity < (1 << align_log2) || !ba.any() {
         return None;
     }
     let mut base = 0;

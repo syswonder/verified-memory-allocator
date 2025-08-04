@@ -1,6 +1,6 @@
 #[allow(unused_imports)]
-// use builtin::*;
-// use builtin_macros::*;
+use builtin::*;
+use builtin_macros::*;
 use core::ops::Range;
 use vstd::{invariant, prelude::*, seq::*, seq_lib::*};
 
@@ -126,7 +126,7 @@ proof fn get_bits_u16_correctness(bv_gets: u16, bits: u16, st:u16, ed:u16)
 {
 }
 
-// proof fn 
+// proof fn
 /*
 /// Allocator of a bitmap, able to allocate / free bits.
 pub trait BitAlloc: BitAllocView{
@@ -228,7 +228,7 @@ pub type BitAlloc1M = BitAllocCascade16<BitAlloc64K>; //20
 
 /// Implement the bit allocator by segment tree algorithm.    BitAlloc +
 pub struct BitAllocCascade16<T:BitAllocView> {
-    pub bitset: u16, // for each bit, 1 indicates available, 0 indicates inavailable
+    pub bitset: BitAlloc16, // for each bit, 1 indicates available, 0 indicates inavailable
     pub sub: [T; 16],
 }
 
@@ -245,7 +245,7 @@ impl<T: BitAllocView + std::marker::Copy> BitAllocView for BitAllocCascade16<T> 
 
     // 每个子分配器的容量都是固定且相等的
     fn cap() -> (res:usize) {
-        (T::cap() * 16) as usize  
+        (T::cap() * 16) as usize
     }
 
     open spec fn spec_cap() -> (res:usize){
@@ -259,18 +259,18 @@ impl<T: BitAllocView + std::marker::Copy> BitAllocView for BitAllocCascade16<T> 
     /// Creates a new `BitAllocCascade16` with all bits set to 0 (all free).
     fn default() -> Self {
         BitAllocCascade16 {
-            bitset: 0,
+            bitset: BitAlloc16 { bits: 0 },
             sub: [T::default(); 16], // need the trait "std::marker::Copy"
         }
     }
 
     /// Checks if there are any free bits (bits set to 1) in the bitmap.
     fn any(&self) -> (res:bool){
-        self.bitset != 0
+        self.bitset.any()
     }
 
     open spec fn spec_any(&self) -> bool{
-        self.bitset != 0
+        self.bitset.spec_any()
     }
 
     /// Tests if a specific bit at `index` is free (1) or allocated (0).
@@ -294,15 +294,49 @@ impl<T: BitAllocView + std::marker::Copy> BitAllocView for BitAllocCascade16<T> 
     /// Finds the next free bit (1) starting from `key` (inclusive).
     /// Returns `Some(index)` of the next free bit, or `None` if no free bits are found.
     fn next(&self, key: usize) -> (res: Option<usize>){
-        let idx = key / T::cap();
-        (idx..16).find_map(|i| {//不支持find_map
-            if true {
-                let key = if i == idx { key - T::cap() * idx } else { 0 };
-                self.sub[i].next(key).map(|x| x + T::cap() * i) //支持map
-            } else {
-                None
+        let idx: usize = key / T::cap();
+
+        assert(idx < 16) by(nonlinear_arith)
+            requires
+                idx == key / T::spec_cap(),
+                Self::spec_cap() == T::spec_cap() * 16,
+                key < Self::spec_cap(),
+                key < (T::spec_cap() * 16),
+                T::spec_cap() > 0,
+        ;
+
+        let mut i = idx;
+        while i < 16
+            invariant
+                i <= 16,
+                Self::cascade_not_overflow(),
+                key < Self::spec_cap(),
+                forall|k: int|
+                    idx <= k < i ==> self.bitset@[k] == false,
+        {
+            if self.bitset.get_bit(i as u16) {
+                let key = if i == idx {
+                    assert(i == idx);
+                    assume(key >= T::spec_cap() * idx);
+                    key - T::cap() * idx
+                } else {
+                    0
+                };
+                assume(key < T::spec_cap());
+                // if let Some(offset) = self.sub[i].next(key) {
+                //     assert(offset >= key);
+                //     assert(i<=15);
+                //     assume(offset < T::spec_cap());
+                //     assume((offset + T::spec_cap() * i) < Self::spec_cap());
+                //     return Some(offset + T::cap() * i)
+                // }
+                // let Some(offset) = self.sub[i].next(key);// 这里要先保证16叉树成型，即上一层有空闲位，则下一层必能返回Some
+                return Some((self.sub[i].next(key)).unwrap() + T::cap() * i);
+                // self.sub[i].next(key).map(|x| x + T::cap() * i)
             }
-        })
+            i += 1;
+        }
+        None
 
         // let n = u16::BITS as u16;
         // let mut result = None;
@@ -334,15 +368,6 @@ impl<T: BitAllocView + std::marker::Copy> BitAllocView for BitAllocCascade16<T> 
 pub struct BitAlloc16 {
     pub bits: u16,
 }
-
-// proof fn div_cancel(a: int, b: int, k: int)
-//     requires b > 0,
-//              a == b * k,
-//     ensures  a / b == k,
-// {
-//     // 交给 non-linear arithmetic 插件即可
-//     // assert(a / b == k) by (nonlinear_arith);
-// }
 
 impl BitAlloc16 {
     /// Gets the boolean value of a specific bit at `index`.
@@ -442,7 +467,7 @@ impl BitAllocView for BitAlloc16 {
     open spec fn cascade_not_overflow() -> bool {
         true
     }
-    
+
     /// Creates a new `BitmapAllocator16` with all bits set to 0 (all free).
     fn default() -> Self {
         BitAlloc16 { bits: 0 }
