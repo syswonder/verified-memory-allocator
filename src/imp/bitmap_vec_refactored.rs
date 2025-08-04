@@ -125,6 +125,8 @@ proof fn get_bits_u16_correctness(bv_gets: u16, bits: u16, st:u16, ed:u16)
         forall|i: u16| 0 <= i < (ed - st) ==> ((get_bit16!(bv_gets, i)) == get_bit16!(bits, (st + i) as u16)),
 {
 }
+
+// proof fn 
 /*
 /// Allocator of a bitmap, able to allocate / free bits.
 pub trait BitAlloc: BitAllocView{
@@ -180,25 +182,26 @@ pub trait BitAllocView {
     /// The default value. Workaround for `const fn new() -> Self`.
     fn default() -> Self where Self: Sized;
 
-    // /// Find a index not less than a given key, where the bit is free.
-    // fn next(&self, key: usize) -> (res: Option<usize>)
-    //     requires
-    //         key < self.spec_cap(),
-    //     ensures match res {
-    //         Some(re) => {
-    //             // If successful, returns the first free index `re` that is not less than `key`.
-    //             // All indices between `key` and `re` (exclusive) must be allocated (false).
-    //             &&& self@[re as int] == true
-    //             &&& re < self.spec_cap()
-    //             &&& re >= key
-    //             &&& forall|i: int| key <= i < re ==> self@[i] == false
-    //         },
-    //         None => {
-    //             // If failed, all indices from `key` to the end are allocated (false).
-    //             forall|i: int| key <= i < self.spec_cap() ==> self@[i] == false
-    //         }
-    //     },
-    // ;
+    /// Find a index not less than a given key, where the bit is free.
+    fn next(&self, key: usize) -> (res: Option<usize>)
+        requires
+            Self::cascade_not_overflow(),
+            key < Self::spec_cap(),
+        ensures match res {
+            Some(re) => {
+                // If successful, returns the first free index `re` that is not less than `key`.
+                // All indices between `key` and `re` (exclusive) must be allocated (false).
+                &&& self@[re as int] == true
+                &&& re < Self::spec_cap()
+                &&& re >= key
+                &&& forall|i: int| key <= i < re ==> self@[i] == false
+            },
+            None => {
+                // If failed, all indices from `key` to the end are allocated (false).
+                forall|i: int| key <= i < Self::spec_cap() ==> self@[i] == false
+            }
+        },
+    ;
 
     /// Whether there are free bits remaining
     fn any(&self) -> (res:bool)
@@ -274,18 +277,57 @@ impl<T: BitAllocView + std::marker::Copy> BitAllocView for BitAllocCascade16<T> 
     fn test(&self, index: usize) -> (res:bool)
     {
         let seq_index: usize = index / T::cap(); //证明seq_index < 16
-        // assume(T::spec_cap() != 0);
-        // assert(Self::spec_cap() == T::spec_cap() * 16);
-        // assert(Self::spec_cap() / T::spec_cap() == 16) by(nonlinear_arith);
-        // assert(index < Self::spec_cap());
-        // assert((index / T::spec_cap()) < 16);
-        // assert(seq_index < 16) by(compute);
 
-        assume(seq_index < 16);
+        assert(seq_index < 16) by(nonlinear_arith)
+            requires
+                seq_index == index / T::spec_cap(),
+                Self::spec_cap() == T::spec_cap() * 16,
+                index < Self::spec_cap(),
+                index < (T::spec_cap() * 16),
+                T::spec_cap() > 0,
+        ;
+
         let bit_index: usize = index % T::cap();
-        // let bit_index = (index % 16) as u16;
         self.sub[seq_index].test(bit_index)
-        // self.get_bit(index as u16)
+    }
+
+    /// Finds the next free bit (1) starting from `key` (inclusive).
+    /// Returns `Some(index)` of the next free bit, or `None` if no free bits are found.
+    fn next(&self, key: usize) -> (res: Option<usize>){
+        let idx = key / T::cap();
+        (idx..16).find_map(|i| {//不支持find_map
+            if true {
+                let key = if i == idx { key - T::cap() * idx } else { 0 };
+                self.sub[i].next(key).map(|x| x + T::cap() * i) //支持map
+            } else {
+                None
+            }
+        })
+
+        // let n = u16::BITS as u16;
+        // let mut result = None;
+        // let mut i = key as u16;
+        // assert(i<n);
+        // while i < n
+        //     invariant_except_break
+        //         result.is_none(),
+        //     invariant
+        //         key <= i <= n,
+        //         n == Self::spec_cap(),
+        //         forall|k: int|
+        //             key <= k < i ==> self@[k] == false,
+        //     ensures
+        //         (i == n && result.is_none()) ||  (i < n && result.is_some() && (result.unwrap() == i as usize) && self@[i as int] == true),
+        //     decreases
+        //         n-i,
+        // {
+        //     if self.get_bit(i) {
+        //         result = Some(i as usize);
+        //         break;
+        //     }
+        //     i += 1;
+        // }
+        // result
     }
 }
 /// Represents a 16-bit bitmap allocator.
@@ -424,34 +466,34 @@ impl BitAllocView for BitAlloc16 {
         self.get_bit(index as u16)
     }
 
-    // /// Finds the next free bit (1) starting from `key` (inclusive).
-    // /// Returns `Some(index)` of the next free bit, or `None` if no free bits are found.
-    // fn next(&self, key: usize) -> (res: Option<usize>){
-    //     let n = u16::BITS as u16;
-    //     let mut result = None;
-    //     let mut i = key as u16;
-    //     assert(i<n);
-    //     while i < n
-    //         invariant_except_break
-    //             result.is_none(),
-    //         invariant
-    //             key <= i <= n,
-    //             n == self.spec_cap(),
-    //             forall|k: int|
-    //                 key <= k < i ==> self@[k] == false,
-    //         ensures
-    //             (i == n && result.is_none()) ||  (i < n && result.is_some() && (result.unwrap() == i as usize) && self@[i as int] == true),
-    //         decreases
-    //             n-i,
-    //     {
-    //         if self.get_bit(i) {
-    //             result = Some(i as usize);
-    //             break;
-    //         }
-    //         i += 1;
-    //     }
-    //     result
-    // }
+    /// Finds the next free bit (1) starting from `key` (inclusive).
+    /// Returns `Some(index)` of the next free bit, or `None` if no free bits are found.
+    fn next(&self, key: usize) -> (res: Option<usize>){
+        let n = u16::BITS as u16;
+        let mut result = None;
+        let mut i = key as u16;
+        assert(i<n);
+        while i < n
+            invariant_except_break
+                result.is_none(),
+            invariant
+                key <= i <= n,
+                n == Self::spec_cap(),
+                forall|k: int|
+                    key <= k < i ==> self@[k] == false,
+            ensures
+                (i == n && result.is_none()) ||  (i < n && result.is_some() && (result.unwrap() == i as usize) && self@[i as int] == true),
+            decreases
+                n-i,
+        {
+            if self.get_bit(i) {
+                result = Some(i as usize);
+                break;
+            }
+            i += 1;
+        }
+        result
+    }
 }
 /*
 impl BitAlloc for BitAlloc16 {
