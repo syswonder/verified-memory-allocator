@@ -1,0 +1,24 @@
+{
+  "name": "hvisor-ma",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+    "cz": "git-cz"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/LiuJun5817/hvisor-ma.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/LiuJun5817/hvisor-ma/issues"
+  },
+  "homepage": "https://github.com/LiuJun5817/hvisor-ma#readme",
+  "devDependencies": {
+    "commitizen": "^4.3.1"
+  }
+}

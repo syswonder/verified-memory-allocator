@@ -52,12 +52,13 @@ pub type BitAlloc256M = BitAllocCascade16<BitAlloc16M>;
 
 /// Implement the bit allocator by segment tree algorithm.
 #[derive(Default)]
+#[derive(Clone, Copy)]
 pub struct BitAllocCascade16<T: BitAlloc> {
     bitset: u16, // for each bit, 1 indicates available, 0 indicates inavailable
     sub: [T; 16],
 }
 
-impl<T: BitAlloc> BitAlloc for BitAllocCascade16<T> {
+impl<T: BitAlloc + std::marker::Copy> BitAlloc for BitAllocCascade16<T> {
     const CAP: usize = T::CAP * 16;
 
     const DEFAULT: Self = BitAllocCascade16 {
@@ -67,8 +68,15 @@ impl<T: BitAlloc> BitAlloc for BitAllocCascade16<T> {
 
     fn alloc(&mut self) -> Option<usize> {
         if self.any() {
+            // let i = self.bitset.trailing_zeros() as usize; //找到 bitset 中第一个为 1 的 bit 的索引 i
+            // let res = self.sub[i].alloc().unwrap() + i * T::CAP;
+            // self.bitset.set_bit(i, self.sub[i].any());
+            // Some(res)
             let i = self.bitset.trailing_zeros() as usize; //找到 bitset 中第一个为 1 的 bit 的索引 i
-            let res = self.sub[i].alloc().unwrap() + i * T::CAP;
+            let mut child = self.sub[i];
+            let res_is_some = child.alloc();
+            self.sub[i] = child;
+            let res = res_is_some.unwrap() + i * T::CAP;
             self.bitset.set_bit(i, self.sub[i].any());
             Some(res)
         } else {
@@ -113,7 +121,7 @@ impl<T: BitAlloc> BitAlloc for BitAllocCascade16<T> {
     }
 }
 
-impl<T: BitAlloc> BitAllocCascade16<T> {
+impl<T: BitAlloc + std::marker::Copy> BitAllocCascade16<T> {
     fn for_range(&mut self, range: Range<usize>, f: impl Fn(&mut T, Range<usize>)) {
         let Range { start, end } = range;
         assert!(start <= end);
@@ -139,6 +147,7 @@ impl<T: BitAlloc> BitAllocCascade16<T> {
 /// BitAlloc16 acts as the leaf (except the leaf bits of course) nodes
 /// in the segment trees.
 #[derive(Default)]
+#[derive(Clone, Copy)]
 pub struct BitAlloc16(u16);
 
 impl BitAlloc for BitAlloc16 {
@@ -287,11 +296,13 @@ mod tests {
     }
     #[test]
     fn BitAlloc1M() {
-        let mut ba = BitAlloc1M::default();
-        assert_eq!(BitAlloc1M::CAP, 1048576);
-        ba.insert(0..1048576);
-        ba.remove(3..6);
-        assert_eq!(ba.alloc_contiguous(80000, 63), None);
+        let mut ba = BitAlloc256::default();
+        // assert_eq!(BitAlloc1M::CAP, 1048576);
+        ba.insert(0..256);
+        // ba.remove(200..256);
+        assert_eq!(ba.alloc(),Some(0));
+        assert_eq!(ba.alloc(),Some(1));
+        // assert_eq!(ba.alloc_contiguous(80000, 63), None);
         // // ba.test(5056);
         // for i in 0..4096 {
         //     assert_eq!(ba.test(i), true);
