@@ -195,6 +195,7 @@ pub trait BitAllocView {
         ensures
             res == self@[key as int],
     ;
+
 }
 
 /// Allocator of a bitmap, able to allocate / free bits.
@@ -204,8 +205,6 @@ pub trait BitAlloc: BitAllocView{
         requires
             old(self).wf(),
         ensures 
-            
-            // res.is_some() == old(self).spec_any(),
             match res {
                 Some(i) => {
                     // If successful, a previously free index `i` is now allocated (set to false).
@@ -238,11 +237,16 @@ pub trait BitAlloc: BitAllocView{
     //         align_log2 < 64,
     // ;
 
-    // /// Free an allocated bit.
-    // fn dealloc(&mut self, key: usize)
-    //     requires
-    //         key < old(self).spec_cap(),
-    // ;
+    /// Free an allocated bit.
+    fn dealloc(&mut self, key: usize)
+        requires
+            old(self).wf(),
+            key < Self::spec_cap(),
+            old(self)@[key as int],
+        ensures
+            self@ == old(self)@.update(key as int, true),
+            self.wf(),
+    ;
 
     // /// Mark bits in the range as unallocated (available)
     // fn insert(&mut self, range: Range<usize>)
@@ -272,7 +276,7 @@ pub type BitAlloc64K = BitAllocCascade16<BitAlloc4K>; //16
 pub type BitAlloc1M = BitAllocCascade16<BitAlloc64K>; //20
 
 /// Implement the bit allocator by segment tree algorithm.    BitAlloc +
-pub struct BitAllocCascade16<T:BitAllocView> {
+pub struct BitAllocCascade16<T> {
     pub bitset: BitAlloc16, // for each bit, 1 indicates available, 0 indicates inavailable
     pub sub: [T; 16],
 }
@@ -425,21 +429,24 @@ impl<T: BitAllocView + std::marker::Copy> BitAllocView for BitAllocCascade16<T> 
     }
 
     /// Tests if a specific bit at `index` is free (1) or allocated (0).
-    fn test(&self, index: usize) -> (res:bool)
+    fn test(&self, key: usize) -> (res:bool)
     {
-        let seq_index: usize = index / T::cap(); //证明seq_index < 16
+        let seq_index: usize = key / T::cap(); //证明seq_index < 16
 
         assert(seq_index < 16) by(nonlinear_arith)
             requires
-                seq_index == index / T::spec_cap(),
+                seq_index == key / T::spec_cap(),
                 Self::spec_cap() == T::spec_cap() * 16,
-                index < Self::spec_cap(),
-                index < (T::spec_cap() * 16),
+                key < Self::spec_cap(),
+                key < (T::spec_cap() * 16),
                 T::spec_cap() > 0,
         ;
 
-        let bit_index: usize = index % T::cap();
-        self.sub[seq_index].test(bit_index)
+        let bit_index: usize = key % T::cap();
+        let res = self.sub[seq_index].test(bit_index);
+        assert(res == self.sub[seq_index as int]@[bit_index as int]);
+
+        res
     }
 
     open spec fn wf(&self) -> bool {
@@ -622,25 +629,8 @@ pub open spec fn view_index_mapping(ba: Seq<bool>, i: int, sub_ba: Seq<bool>, ca
     forall|j:int| 0 <= j < cap ==> ba[(cap * i + j)] == sub_ba[j]
 }
 
-// proof fn lemma_spec_any_eq_exists_child(setbit_ba: Seq<bool>, cap: int, bits: u16, sub_ba: Seq<bool>)
-//     requires
-//         // forall|k:int| 0 <= k < 16 ==> ba[k] == false,
-//         forall|k:int| 0 <= k < 16 ==> setbit_ba[k] == exists|j:int| 0 <= j < cap && sub_ba[j] == true,
-//         forall|j:int| 0 <= j < 16 ==> ba[j] == get_bit16!(bits, j as u16)
-//     ensures
-//         // forall|k:int| 0 <= k < cap ==> ba[k] == false,
-//         // exists|j:int| 0 <= j < cap && ba[j] == true
-//         bits == 0,
-// {
-    
-// }
-
-
 
 impl<T: BitAlloc + std::marker::Copy> BitAlloc for BitAllocCascade16<T>{
-    // spec fn update_in_place(ba1: Seq<bool>, ba2: Seq<bool>,i: int) -> bool{
-    //     ba2 == ba1.update(i, s2.sub[i].spec_any())
-    // }
     
     fn alloc(&mut self) -> (res:Option<usize>) 
     {
@@ -766,14 +756,9 @@ impl<T: BitAlloc + std::marker::Copy> BitAlloc for BitAllocCascade16<T>{
         assert(forall|j:int| 0 <= j < 16 && j!=i ==> self.bitset@[j] == old(self).bitset@[j]);
         assert(forall|k:int|
                 0 <= k < 16 ==> self.bitset@[k] == self.sub[k].spec_any());
-        
-        // assert(forall|k:int|
-        //         0 <= k < 16 ==>
-        //         self.bitset@[k] == exists|j:int| 0 <= j < cap && self.sub[k]@[j] == true);
 
         assert(forall|loc2:int| (0 <= loc2 < Self::spec_cap()) ==> self@[loc2] == self.sub[loc2 / cap]@[loc2 % cap]);
         
-        //他不知道self.bitset@[j]和self@[loc2]的关系
         assert(forall|j:int| 0 <= j < 16 && j!=i ==> self.sub[j]@ == old(self).sub[j]@);
         
 
@@ -913,36 +898,110 @@ impl<T: BitAlloc + std::marker::Copy> BitAlloc for BitAllocCascade16<T>{
         Some(res as usize)
 
     }
-}
 
+    fn dealloc(&mut self, key: usize)
+        //     requires
+        //         old(self).wf(),
+        //         key < Self::spec_cap(),
+        //         old(self)@[key as int],
+        //     ensures
+        //         self@ == old(self)@.update(key as int, true),
+        //         self.wf(), 
+    {
+        let i: usize = key / T::cap(); //i < 16
+        let ghost cap = T::spec_cap() as int;
+        assert(i < 16) by(nonlinear_arith)
+            requires
+                i == key / T::spec_cap(),
+                Self::spec_cap() == T::spec_cap() * 16,
+                key < Self::spec_cap(),
+                key < (T::spec_cap() * 16),
+                T::spec_cap() > 0,
+        ;
 
+        let bit_index: usize = key % T::cap();
 
-pub proof fn lemma_bits_nonzero_iff_exists_true_bit(bits: u16, ba: Seq<bool>)
-    requires
-        ba.len() == 16,
-        forall|t:int| 0 <= t < 16 ==> ba[t] == get_bit16!(bits, t as u16),
-        forall|t:int| 0 <= t < 16 ==> ba[t] == false,
-    ensures
-        bits == 0
-{
-    // 反证：若 bits != 0，则在 ctz 位置必有一位为 1
-    if bits != 0 {
-        let i: u16 = bits.trailing_zeros() as u16;
+        let mut child = self.sub[i];
+        child.dealloc(bit_index);
+        assert(child@[bit_index as int]);
+        assert(child.spec_any()) by{
+            child.lemma_bits_nonzero_implies_exists_true();
+        };
 
-        // 这里需要你已有/可证明的两个事实：
-        // 1) 0 <= i < 16   （ctz 对非零一定落在位宽内）
-        // 2) get_bit16!(bits, i) == true  （ctz 对应的那一位为 1）
-        assert(0 <= i < 16);
-        assert(get_bit16!(bits, i) == true);
+        self.sub[i] = child;
+        self.bitset.set_bit(i as u16, true);
 
-        // 由映射得到 ba[i] 也为 true
-        assert(ba[i as int] == get_bit16!(bits, i));
-        assert(ba[i as int] == true);
+        //改完值后确保仍然保持 wellformed
+        assert(self.bitset@[i as int] == self.sub[i as int].spec_any());
+        assert(forall|k:int| 0 <= k < 16 ==> self.sub[k].wf());
 
-        // 与前提 “forall t. ba[t] == false” 矛盾
-        assert(false);
+        assert(forall|k:int|
+                0 <= k < 16 ==> self.bitset@[k] == self.sub[k].spec_any());
+        // 证明更新后任然保持view_index_mapping
+        assert forall|j:int| 0 <= j < 16 implies view_index_mapping(self@,j,self.sub[j]@,cap) by{
+            assert(forall|loc2:int| (0 <= loc2 < Self::spec_cap()) ==> self@[loc2] == self.sub[loc2 / cap]@[loc2 % cap]);
+
+            assert forall|loc:int| 0 <= loc < cap implies self@[(cap * j + loc)] == self.sub[j]@[loc] by{
+                assert(0 <= (cap * j + loc) < Self::spec_cap()) by(nonlinear_arith)
+                    requires
+                        0 <= j < 16,
+                        0 <= loc < cap,
+                        Self::spec_cap() == 16*cap,
+                ;
+                assert((cap * j + loc) / cap == j) by(nonlinear_arith)
+                    requires
+                        (cap * j + loc) < Self::spec_cap(),
+                        Self::spec_cap() == cap * 16,
+                        0 <= j < 16,
+                        cap > 0,
+                        0 <= loc < cap,
+                ;
+                assert((cap * j + loc) % cap == loc) by(nonlinear_arith)
+                    requires
+                        (cap * j + loc) < Self::spec_cap(),
+                        Self::spec_cap() == cap * 16,
+                        0 <= j < 16,
+                        cap > 0,
+                        0 <= loc < cap,
+                ;
+            };
+        }
+    
+        // 证明大bool序列其他位没有变
+        assert forall|loc2:int| (0 <= loc2 < Self::spec_cap() && loc2 != key as int) implies self@[loc2] == old(self)@[loc2] by{
+            let j = loc2 / cap;
+            let k = loc2 % cap;
+
+            assert(0 <= k < cap);
+
+            assert(0 <= j < 16 ) by(nonlinear_arith)
+                requires
+                    j == loc2 / cap,
+                    0 <= loc2 < Self::spec_cap() && loc2 != key as int,
+                    Self::spec_cap() == 16*cap,
+            ;
+            assert(loc2 == j*cap + k) by(nonlinear_arith)
+                requires
+                    j == loc2 / cap,
+                    k == loc2 % cap,
+                    0 <= loc2 < Self::spec_cap() && loc2 != key as int,
+                    Self::spec_cap() == 16*cap,
+            ;
+
+            assert(self@[j*cap + k] == self.sub[j]@[k]);
+            assert(old(self).sub[j]@[k] == self.sub[j]@[k]);
+            
+            assert(self@[loc2] == old(self)@[loc2]);
+        };
+
+        // 到此证完大bool序列只修改了新分配的那一位，其他位没有修改
+        proof {
+            assert_seqs_equal!(
+                self@,
+                old(self)@.update(key as int, true)
+            );
+        }
     }
-    // 唯一可行分支：bits == 0
 }
 
 pub proof fn lemma_view_indexs_mapping(ba: Seq<bool>, i: int, sub_ba: Seq<bool>, cap: int, start: int, end: int)
@@ -997,9 +1056,9 @@ impl BitAlloc16 {
         ensures
             bit == self@[index as int],
     {
-        let bit_index: u16 = index % 16;
+        // let bit_index: u16 = index % 16;
 
-        get_bit16_macro!(self.bits, bit_index as u16)
+        get_bit16_macro!(self.bits, index as u16)
     }
 
     /// Extracts a range of bits from the bitmap as a u16 value.
@@ -1142,11 +1201,10 @@ impl BitAllocView for BitAlloc16 {
     }
 
     /// Tests if a specific bit at `index` is free (1) or allocated (0).
-    fn test(&self, index: usize) -> (res:bool)
-            // res == (get_bit16_macro!(self.bits, index as u16)),
+    fn test(&self, key: usize) -> (res:bool)
     {
-        // let bit_index = (index % 16) as u16;
-        self.get_bit(index as u16)
+        let res = self.get_bit(key as u16);
+        res
     }
 
     open spec fn wf(&self) -> bool {
@@ -1208,22 +1266,6 @@ impl BitAlloc for BitAlloc16 {
     /// Allocates a single free bit (represented by 1) and sets it to 0 (allocated).
     /// Returns `Some(index)` if successful, `None` if no free bits are available.
     fn alloc(&mut self) -> (res: Option<usize>)
-        // ensures 
-        //     // res.is_some() == old(self).spec_any(),
-        //     match res {
-        //         Some(i) => {
-        //             // If successful, a previously free index `i` is now allocated (set to false).
-        //             // Other indices remain unchanged.
-        //             &&& i < Self::spec_cap()
-        //             &&& old(self)@[i as int] == true
-        //             &&& forall |j: int| 0 <= j < i ==> old(self)@[j] == false
-        //             &&& self@ == old(self)@.update(i as int, false)
-        //         },
-        //         None => {
-        //             // If failed, all bits were already allocated (self.bits is 0), and the state is unchanged.
-        //             !self.spec_any()
-        //         },
-        //     }
     {
         if !self.any() {
             return None;
@@ -1290,13 +1332,15 @@ impl BitAlloc for BitAlloc16 {
     //     }
     // }
 
-    // /// Deallocates a single bit at `index` by setting it to 1 (free).
-    // fn dealloc(&mut self, index: usize)
-    //     ensures
-    //         self@ == old(self)@.update(index as int, true),
-    // {
-    //     self.set_bit(index as u16, true);
-    // }
+    /// Deallocates a single bit at `index` by setting it to 1 (free).
+    fn dealloc(&mut self, key: usize)
+    {
+        self.set_bit(key as u16, true);
+        assert(self@[key as int]);
+        assert(self.spec_any()) by{
+            self.lemma_bits_nonzero_implies_exists_true();
+        };
+    }
 
     // /// Marks a range of bits as free (sets them to 1).
     // fn insert(&mut self, range: Range<usize>)

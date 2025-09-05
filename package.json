@@ -4,7 +4,7 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "echo \"Error: no test specified\" && exit 1",
     "cz": "git-cz"
   },
   "repository": {
@@ -19,6 +19,12 @@
   },
   "homepage": "https://github.com/LiuJun5817/hvisor-ma#readme",
   "devDependencies": {
-    "commitizen": "^4.3.1"
+    "commitizen": "^4.3.1",
+    "cz-conventional-changelog": "^3.3.0"
+  },
+  "config": {
+    "commitizen": {
+      "path": "./node_modules/cz-conventional-changelog"
+    }
   }
 }

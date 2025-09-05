@@ -314,8 +314,8 @@ mod tests {
         // assert_eq!(ba.alloc(), Some(0));
         // assert_eq!(ba.alloc(), Some(1));
         // assert_eq!(ba.alloc(), Some(4094));
-        // ba.dealloc(0);
-        // ba.dealloc(1);
+        ba.dealloc(0);
+        ba.dealloc(0);
         // ba.dealloc(4094);
 
         // for _ in 0..4 {
