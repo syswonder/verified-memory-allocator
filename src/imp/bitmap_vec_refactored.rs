@@ -248,13 +248,21 @@ pub trait BitAlloc: BitAllocView{
             self.wf(),
     ;
 
-    // /// Mark bits in the range as unallocated (available)
-    // fn insert(&mut self, range: Range<usize>)
-    //     requires
-    //         range.start < old(self).spec_cap(),
-    //         range.end <= old(self).spec_cap(),
-    //         range.start < range.end,
-    // ;
+    /// Mark bits in the range as unallocated (available)
+    fn insert(&mut self, range: Range<usize>)
+        requires
+            old(self).wf(),
+            range.start < Self::spec_cap(),
+            range.end <= Self::spec_cap(),
+            range.start < range.end,
+        ensures
+            forall|loc1: int|
+                (range.start <= loc1 < range.end) ==> self@[loc1] == true,
+            forall|loc2: int|
+                (0 <= loc2 < range.start || range.end <= loc2 < Self::spec_cap()) ==> self@[loc2] == old(self)@[loc2],
+            self@.len() == old(self)@.len(),
+            self.wf(),
+    ;
 
     // /// Reverse of insert
     // fn remove(&mut self, range: Range<usize>)
@@ -276,7 +284,7 @@ pub type BitAlloc64K = BitAllocCascade16<BitAlloc4K>; //16
 pub type BitAlloc1M = BitAllocCascade16<BitAlloc64K>; //20
 
 /// Implement the bit allocator by segment tree algorithm.    BitAlloc +
-pub struct BitAllocCascade16<T> {
+pub struct BitAllocCascade16<T: BitAllocView> {
     pub bitset: BitAlloc16, // for each bit, 1 indicates available, 0 indicates inavailable
     pub sub: [T; 16],
 }
@@ -386,18 +394,13 @@ impl<T: BitAllocView + std::marker::Copy> BitAllocView for BitAllocCascade16<T> 
             };
             
             assert(forall|k:int, j:int|
-                0 <= k < 16 && 0 <= j < cap ==> self@[(k*cap) + j] == self.sub[k]@[j]
-            );
+                0 <= k < 16 && 0 <= j < cap ==> self@[(k*cap) + j] == self.sub[k]@[j]);
 
             assert forall|k:int, j:int|
                 0 <= k < 16 && 0 <= j < cap implies self.sub[k]@[j] == false by{
                     assert(self.sub[k].spec_any() == false);
                     self.sub[k].lemma_bits_nonzero_implies_exists_true();
             };
-
-            assert(forall|k:int, j:int|
-                0 <= k < 16 && 0 <= j < cap ==> self@[(k*cap) + j] == self.sub[k]@[j]
-            );
 
             assert forall|loc2:int| 0 <= loc2 < Self::spec_cap() implies self@[loc2] == false by{
                 let k = loc2 / cap;
@@ -831,11 +834,7 @@ impl<T: BitAlloc + std::marker::Copy> BitAlloc for BitAllocCascade16<T>{
 
         // 证明原有大bool序列从0到res都为false
         assert(forall |j: int| 0 <= j < res_is_some.unwrap() as int ==> old(self).sub[i as int]@[j] == false);
-        // proof{
-        //     lemma_view_indexs_mapping(old(self)@,i as int,old(self).sub[i as int]@,cap,0,res_is_some.unwrap() as int);
-        // }
         assert forall|loc2:int| i*cap <= loc2 < (i*cap + res_is_some.unwrap()) as int implies old(self)@[loc2] == false by{
-            // assert(forall|loc2:int| (0 <= loc2 < Self::spec_cap() && loc2 != (i*cap + res_is_some.unwrap()) as int) ==> self@[loc2] == old(self)@[loc2]);
             assert(old(self)@[loc2] == old(self).sub[i as int]@[loc2 - (i*cap) as int]) by{
 
                 assert(i == loc2 / cap) by(nonlinear_arith)
@@ -858,41 +857,13 @@ impl<T: BitAlloc + std::marker::Copy> BitAlloc for BitAllocCascade16<T>{
                 ;
             }
             assert(forall|loc2:int| (0 <= loc2 < Self::spec_cap()) ==> old(self)@[loc2] == old(self).sub[loc2 / cap]@[loc2 % cap]);
-                
-            // };
         };
         
         assert(self@[res as int] == false);
         
         // 证明更新后任然保持view_index_mapping
         assert forall|j:int| 0 <= j < 16 implies view_index_mapping(self@,j,self.sub[j]@,cap) by{
-
-            assert(forall|loc2:int| (0 <= loc2 < Self::spec_cap()) ==> self@[loc2] == self.sub[loc2 / cap]@[loc2 % cap]);
-
-            assert forall|loc:int| 0 <= loc < cap implies self@[(cap * j + loc)] == self.sub[j]@[loc] by{
-                assert(0 <= (cap * j + loc) < Self::spec_cap()) by(nonlinear_arith)
-                    requires
-                        0 <= j < 16,
-                        0 <= loc < cap,
-                        Self::spec_cap() == 16*cap,
-                ;
-                assert((cap * j + loc) / cap == j) by(nonlinear_arith)
-                    requires
-                        (cap * j + loc) < Self::spec_cap(),
-                        Self::spec_cap() == cap * 16,
-                        0 <= j < 16,
-                        cap > 0,
-                        0 <= loc < cap,
-                ;
-                assert((cap * j + loc) % cap == loc) by(nonlinear_arith)
-                    requires
-                        (cap * j + loc) < Self::spec_cap(),
-                        Self::spec_cap() == cap * 16,
-                        0 <= j < 16,
-                        cap > 0,
-                        0 <= loc < cap,
-                ;
-            };
+            self.lemma_maintain_view_indexs_mapping();
         };
         
         Some(res as usize)
@@ -900,13 +871,6 @@ impl<T: BitAlloc + std::marker::Copy> BitAlloc for BitAllocCascade16<T>{
     }
 
     fn dealloc(&mut self, key: usize)
-        //     requires
-        //         old(self).wf(),
-        //         key < Self::spec_cap(),
-        //         old(self)@[key as int],
-        //     ensures
-        //         self@ == old(self)@.update(key as int, true),
-        //         self.wf(), 
     {
         let i: usize = key / T::cap(); //i < 16
         let ghost cap = T::spec_cap() as int;
@@ -939,32 +903,7 @@ impl<T: BitAlloc + std::marker::Copy> BitAlloc for BitAllocCascade16<T>{
                 0 <= k < 16 ==> self.bitset@[k] == self.sub[k].spec_any());
         // 证明更新后任然保持view_index_mapping
         assert forall|j:int| 0 <= j < 16 implies view_index_mapping(self@,j,self.sub[j]@,cap) by{
-            assert(forall|loc2:int| (0 <= loc2 < Self::spec_cap()) ==> self@[loc2] == self.sub[loc2 / cap]@[loc2 % cap]);
-
-            assert forall|loc:int| 0 <= loc < cap implies self@[(cap * j + loc)] == self.sub[j]@[loc] by{
-                assert(0 <= (cap * j + loc) < Self::spec_cap()) by(nonlinear_arith)
-                    requires
-                        0 <= j < 16,
-                        0 <= loc < cap,
-                        Self::spec_cap() == 16*cap,
-                ;
-                assert((cap * j + loc) / cap == j) by(nonlinear_arith)
-                    requires
-                        (cap * j + loc) < Self::spec_cap(),
-                        Self::spec_cap() == cap * 16,
-                        0 <= j < 16,
-                        cap > 0,
-                        0 <= loc < cap,
-                ;
-                assert((cap * j + loc) % cap == loc) by(nonlinear_arith)
-                    requires
-                        (cap * j + loc) < Self::spec_cap(),
-                        Self::spec_cap() == cap * 16,
-                        0 <= j < 16,
-                        cap > 0,
-                        0 <= loc < cap,
-                ;
-            };
+            self.lemma_maintain_view_indexs_mapping();
         }
     
         // 证明大bool序列其他位没有变
@@ -1002,6 +941,325 @@ impl<T: BitAlloc + std::marker::Copy> BitAlloc for BitAllocCascade16<T>{
             );
         }
     }
+    
+    fn insert(&mut self, range: Range<usize>)
+        // requires
+        //     old(self).wf(),
+        //     range.start < Self::spec_cap(),
+        //     range.end <= Self::spec_cap(),
+        //     range.start < range.end,
+        // ensures
+        //     forall|loc1: int|
+        //         (range.start <= loc1 < range.end) ==> self@[loc1] == true,
+        //     forall|loc2: int|
+        //         (0 <= loc2 < range.start || range.end <= loc2 < Self::spec_cap()) ==> self@[loc2] == old(self)@[loc2],
+        //     self@.len() == old(self)@.len(),
+        //     self.wf(),
+    {
+        let st = range.start;
+        let ed = range.end;
+
+        
+        let first = st / T::cap(); //首个子分配器
+        let last = (ed - 1) / T::cap(); //末尾子分配器
+        let n = last + 1; //结束循环条件
+
+        assert(first <= last) by (nonlinear_arith)
+            requires
+                first == st / T::spec_cap(),
+                last == (ed - 1) / T::spec_cap() as int,
+                st < ed,
+                T::spec_cap() > 0,
+        ;
+        assert(last < 16) by (nonlinear_arith)
+            requires
+                last == (ed - 1) / T::spec_cap() as int,
+                ed <= Self::spec_cap(),
+                Self::spec_cap() == 16 * T::spec_cap(),
+                T::spec_cap() > 0,
+        ;
+        assert(first < 16);
+        assert(T::spec_cap() * first < Self::spec_cap()) by(nonlinear_arith)
+            requires
+                Self::spec_cap() == T::spec_cap() * 16,
+                0 <= first < 16,
+                T::spec_cap() > 0,
+        ;
+        let mut i = first;
+        assert(i * T::spec_cap() <= st) by (nonlinear_arith)
+            requires
+                i == st / T::spec_cap(), 
+                T::spec_cap() > 0,
+        ;
+        let mut current_end = st;
+        while i < n 
+            invariant
+                self.wf(),
+                0 <= i <= n,
+                n <= 16,
+                i >= first,
+                first == st / T::spec_cap(),
+                st < ed,
+                ed <= Self::spec_cap(),
+                T::spec_cap() > 0,
+                // n == last + 1,
+                // i <= last + 1,
+                // last == (ed - 1) / T::spec_cap() as int,
+
+                // forall|k: int|
+                //     st <= k < ed && k < i * T::spec_cap() ==> self@[k] == true,
+                (i > last) ==> forall|k: int|
+                                    range.start <= k < range.end ==> self@[k] == true,
+                (i <= last) ==> forall|k: int|
+                                    range.start <= k < i * T::spec_cap() ==> self@[k] == true,
+                forall|loc2: int|
+                    (0 <= loc2 < st || ed <= loc2 < Self::spec_cap()) ==> self@[loc2] == old(self)@[loc2],
+                self@.len() == old(self)@.len(),
+                //本轮要处理的子树尚未被修改
+                // i < n ==> (forall |t:int| 0 <= t < T::spec_cap() ==> self.sub[i as int]@[t] == old(self).sub[i as int]@[t]),
+                // i < n ==> (self.sub[i as int]@ == old(self).sub[i as int]@),
+            decreases
+                n - i,
+        {
+            // assert(self.sub[i as int]@ == old(self).sub[i as int]@);
+            let begin = if i == st / T::cap() {
+                st % T::cap()
+                // st
+            } else {
+                0
+            };
+            let stop = if i == (ed - 1) / T::cap() {
+                if ed % T::cap() == 0 {
+                    T::cap()
+                } else {
+                    ed % T::cap()
+                }
+            } else {
+                T::cap()
+            };
+            // let curren_i =i;
+            let mut child = self.sub[i];
+
+            let ghost cap = T::spec_cap();
+            assert(begin < stop) by (nonlinear_arith)
+                requires
+                    i < 16,
+                    st < ed,
+                    cap == T::spec_cap(),
+                    ed <= Self::spec_cap(),
+                    Self::spec_cap() == 16 * cap,
+                    ed > 0,
+                    begin == (if i == st / cap { st % cap } else { 0 }),
+                    stop  == (if i == (ed - 1) / cap as int { if ed % cap == 0 { cap } else {
+                                ed % cap }} else { cap }),
+                    cap > 0,
+            ;
+
+            assert(st <= begin + i * cap) by (nonlinear_arith)
+                requires
+                    i < 16,
+                    first == st / cap,
+                    i >= first,
+                    st < Self::spec_cap(),
+                    cap == T::spec_cap(),
+                    Self::spec_cap() == 16 * cap,
+                    begin == (if i == st / cap { st % cap } else { 0 }),
+                    cap > 0,
+            ;
+
+            let old_child = child;
+            assert(forall|loc2: int|
+                (0 <= loc2 < st || ed <= loc2 < Self::spec_cap()) ==> self@[loc2] == old(self)@[loc2]);
+            assert(forall|loc2: int|
+                (0 <= loc2 < st) ==> self@[loc2] == old(self)@[loc2]);
+
+            child.insert(begin..stop);
+
+            // assert(forall|k:int| 0 <= k < 16 ==> self.sub[k]@.len() == cap);
+            self.sub[i] = child;
+            
+            self.bitset.set_bit(i as u16, self.sub[i].any());
+            
+            //改完值后其他位值的值没有改变
+            //forall|loc2: int|
+                    // (0 <= loc2 < st || ed <= loc2 < Self::spec_cap()) ==> self@[loc2] == old(self)@[loc2],
+            
+            //确保修改值
+            //forall|k: int|
+                    // st <= k < ed && k < i * T::spec_cap() ==> self@[k] == true,
+            assert(forall|loc1: int|
+                (begin <= loc1 < stop) ==> child@[loc1] == true);
+            assert(forall|loc1: int|
+                (begin <= loc1 < stop) ==> self.sub[i as int]@[loc1] == true);
+            
+            // assert(forall|loc1: int|
+            //     (0 <= loc1 < begin || stop <= loc1 < T::spec_cap()) ==> child@[loc1] == old_child@[loc1]);
+            
+            // assert(forall|loc1: int|
+            //     (0 <= loc1 < begin || stop <= loc1 < T::spec_cap()) ==> self.sub[i as int]@[loc1] == child@[loc1]);
+            
+            // assert(forall|loc1: int|
+            //     (0 <= loc1 < begin || stop <= loc1 < T::spec_cap()) ==> self.sub[i as int]@[loc1] == old_child@[loc1]);
+
+            // assert(forall|loc1: int|
+            //     (0 <= loc1 < begin || stop <= loc1 < T::spec_cap()) ==> old(self).sub[i as int]@[loc1] == old_child@[loc1]);
+
+            // assert(forall|loc1: int|
+            //     (0 <= loc1 < begin || stop <= loc1 < T::spec_cap()) ==> self.sub[i as int]@[loc1] == old(self).sub[i as int]@[loc1]);
+
+            
+            // assume(forall|loc2: int|
+            //         (0 <= loc2 < st || ed <= loc2 < Self::spec_cap()) ==> self@[loc2] == old(self)@[loc2]);
+            // assume(forall|loc2: int|
+            //         (0 <= loc2 < begin || stop <= loc2 < cap) ==> self.sub[i as int]@[loc2] == old(self).sub[i as int]@[loc2]);
+
+
+            //改完值后确保仍然保持 wellformed
+            assert(self.bitset@[i as int] == self.sub[i as int].spec_any());
+            assert(forall|k:int| 0 <= k < 16 ==> self.sub[k].wf());
+
+            assert(forall|k:int|
+                    0 <= k < 16 ==> self.bitset@[k] == self.sub[k].spec_any());
+            // 证明更新后任然保持view_index_mapping
+            assert forall|j:int| 0 <= j < 16 implies view_index_mapping(self@,j,self.sub[j]@,cap as int) by{
+                self.lemma_maintain_view_indexs_mapping();
+            }
+
+            assert(self@.len() == old(self)@.len());
+            assert(self.wf());
+
+            // assert(forall|loc1: int|
+                // (begin <= loc1 < stop) ==> self.sub[i as int]@[loc1] == true);
+            assert(forall|loc2:int| (0 <= loc2 < Self::spec_cap()) ==> self@[loc2] == self.sub[loc2 / cap as int]@[loc2 % cap as int]);
+            assert(stop + i * cap <= Self::spec_cap())by(nonlinear_arith)
+                requires
+                    stop <= cap,
+                    Self::spec_cap() == cap * 16,
+                    0 <= i < 16,
+                    cap > 0,
+                    cap == T::spec_cap(),
+                    ed <= Self::spec_cap(),
+                    Self::spec_cap() == 16 * cap,
+                    ed > 0,
+                    stop  == (if i == (ed - 1) / cap as int { if ed % cap == 0 { cap } else {
+                                ed % cap }} else { cap }),                        
+                ;
+            
+            assert forall|loc1: int|
+                ((begin + i * cap) <= loc1 < (stop + i * cap)) implies self@[loc1] == self.sub[i as int]@[loc1 - (i*cap) as int] by{
+                    assert(i == loc1 / cap as int) by(nonlinear_arith)
+                        requires
+                            (begin + i * cap) <= loc1 < (stop + i * cap),
+                            stop <= cap,
+                            Self::spec_cap() == cap * 16,
+                            stop + i * cap <= Self::spec_cap(),
+                            0 <= i < 16,
+                            cap > 0,
+                    ;
+                    assert(loc1 % cap as int == loc1 - (i*cap) as int) by(nonlinear_arith)
+                        requires
+                            (begin + i * cap) <= loc1 < (stop + i * cap),
+                            stop + i * cap <= Self::spec_cap(),
+                            Self::spec_cap() == cap * 16,
+                            0 <= i < 16,
+                            cap > 0,
+                            stop <= cap,
+                    ;                    
+                };
+
+            assert forall|loc1: int|
+                ((begin + i * cap) <= loc1 < (stop + i * cap)) implies self@[loc1] == true by{
+                    // assert(view_index_mapping(self@, i as int, self.sub[i as int]@, cap as int));
+                    assert(forall|k: int|
+                        (begin <= k < stop) ==> self.sub[i as int]@[k] == true);
+                };
+            
+
+
+            // assert(Self::cascade_not_overflow());
+            // assert(T::spec_cap() > 0);
+            // assert(self.sub.len() == 16);
+            // assert(forall|k:int| 0 <= k < 16 ==> self.sub[k]@.len() == cap);
+
+            assume(forall|loc2: int|
+                    (0 <= loc2 < st || ed <= loc2 < Self::spec_cap()) ==> self@[loc2] == old(self)@[loc2]);
+            
+
+
+            i += 1;
+            if i > last {
+                assume(forall|k: int|
+                    range.start <= k < range.end ==> self@[k] == true);
+            } else {
+                assume(forall|k: int|
+                    range.start <= k < i * T::spec_cap() ==> self@[k] == true);
+            }
+
+        }
+    }
+}
+
+impl<T: BitAllocView + std::marker::Copy> BitAllocCascade16<T> {
+    proof fn lemma_maintain_view_indexs_mapping(&self)
+        requires
+            0 < T::spec_cap(),
+            Self::spec_cap() == 16 * T::spec_cap(),
+            forall|loc2:int|
+                0 <= loc2 < Self::spec_cap()
+                ==> self@[loc2] == self.sub[(loc2 / T::spec_cap() as int)]@[(loc2 % T::spec_cap() as int)],
+        ensures
+            forall|j:int| 0 <= j < 16 ==> view_index_mapping(self@,j,self.sub[j]@,T::spec_cap() as int),
+    {
+        let ghost cap = T::spec_cap() as int;
+        assert forall|j:int| 0 <= j < 16 implies view_index_mapping(self@,j,self.sub[j]@,cap) by{
+            assert(forall|loc2:int| (0 <= loc2 < Self::spec_cap()) ==> self@[loc2] == self.sub[loc2 / cap]@[loc2 % cap]);
+
+            assert forall|loc:int| 0 <= loc < cap implies self@[(cap * j + loc)] == self.sub[j]@[loc] by{
+                assert(0 <= (cap * j + loc) < Self::spec_cap()) by(nonlinear_arith)
+                    requires
+                        0 <= j < 16,
+                        0 <= loc < cap,
+                        Self::spec_cap() == 16*cap,
+                ;
+                assert((cap * j + loc) / cap == j) by(nonlinear_arith)
+                    requires
+                        (cap * j + loc) < Self::spec_cap(),
+                        Self::spec_cap() == cap * 16,
+                        0 <= j < 16,
+                        cap > 0,
+                        0 <= loc < cap,
+                ;
+                assert((cap * j + loc) % cap == loc) by(nonlinear_arith)
+                    requires
+                        (cap * j + loc) < Self::spec_cap(),
+                        Self::spec_cap() == cap * 16,
+                        0 <= j < 16,
+                        cap > 0,
+                        0 <= loc < cap,
+                ;
+            };
+        }
+    }
+
+    // fn for_range(&mut self, range: Range<usize>, f: impl Fn(&mut T, Range<usize>)) {
+    //     let Range { start, end } = range;
+    //     // assert!(start <= end);
+    //     // assert!(end <= Self::spec_cap());
+    //     for i in start / T::cap()..=(end - 1) / T::cap() {
+    //         let begin = if start / T::cap() == i {
+    //             start % T::cap()
+    //         } else {
+    //             0
+    //         };
+    //         let end = if end / T::cap() == i {
+    //             end % T::cap()
+    //         } else {
+    //             T::cap()
+    //         };
+    //         f(&mut self.sub[i], begin..end);
+    //         self.bitset.set_bit(i as u16, self.sub[i].any());
+    //     }
+    // }
 }
 
 pub proof fn lemma_view_indexs_mapping(ba: Seq<bool>, i: int, sub_ba: Seq<bool>, cap: int, start: int, end: int)
@@ -1241,22 +1499,6 @@ impl BitAllocView for BitAlloc16 {
     }    
 }
 
-// pub proof fn lemma_ctz_lowest_one(ba: Seq<bool>, bits: u16, i: u16)
-//     requires 
-//         bits != 0,
-//         i == bits.trailing_zeros() as u16,
-//     ensures        
-//         0 <= i < 16,
-//         ba[i as int] == true,
-//         forall|j:int| 0 <= j < i as int ==> ba[j] == false,  
-// { /* 证明思路：令 i = ctz(bits)；
-//     l
-//      - 证明 bits & ((1u16 << i) - 1) == 0  ⇒ j<i 位全 0
-//      - 证明 (bits >> i) & 1 == 1         ⇒ 第 i 位为 1
-//      若自动化不行，可以对 0..15 做一个小循环/位移来证。*/ 
-//     assert(bits & ((1u16 << i) - 1) as u16 == 0) by(bit_vector);
-//     assert((bits >> i) & 1 == 1);
-// }
 
 impl BitAlloc for BitAlloc16 {
     // spec fn update_in_place(s1:&Self, s2:&Self,i: int) -> bool{
@@ -1342,22 +1584,52 @@ impl BitAlloc for BitAlloc16 {
         };
     }
 
-    // /// Marks a range of bits as free (sets them to 1).
-    // fn insert(&mut self, range: Range<usize>)
-    //     ensures
-    //         get_bits16!(self.bits, range.start as u16, range.end as u16) == (0xffffu16 >> (16 - (range.end as u16 - range.start as u16))),
-    //         forall|loc2: int|
-    //             (0 <= loc2 < range.start || range.end <= loc2  < 16) ==> self@[loc2] == old(self)@[loc2],
-    // {
-    //     let width = (range.end - range.start) as u16;
-    //     let insert_val = 0xffffu16 >> (16 - width);
+    /// Marks a range of bits as free (sets them to 1).
+    fn insert(&mut self, range: Range<usize>)       
+    {
+        let ghost st = range.start;
+        let ghost ed = range.end;
+        let width = (range.end - range.start) as u16;
+        assert(width<=16);
+        let insert_val = 0xffffu16 >> ((16 - width) as u16);
 
-    //     // Proof that insert_val's higher (16 - width) bits are zero.
-    //     assert((0xffffu16 >> (16 - width) as u16) << ((u16::BITS) as u16 - width) as u16 >>
-    //     ((u16::BITS) as u16 - width) as u16 == (0xffffu16 >> (16 - width) as u16)) by (bit_vector);
-    //     let range_u16 = (range.start as u16)..(range.end as u16);
-    //     self.set_bits(range_u16, insert_val);
-    // }
+        // Proof that insert_val's higher (16 - width) bits are zero.
+        assert(insert_val << (16 - width) as u16 >> (16 - width) as u16 == insert_val) by (bit_vector) 
+            requires
+                insert_val == 0xffffu16 >> ((16 - width) as u16)
+        ;
+
+        let range_u16 = (range.start as u16)..(range.end as u16);
+        self.set_bits(range_u16, insert_val);
+
+        assert(forall|j: u16| 0 <= j < width ==> (insert_val >> j) & 1u16 == 1u16) by (bit_vector)
+            requires
+                width == (ed - st) as u16,
+                0 < width <= 16,
+                insert_val == 0xffffu16 >> ((16 - width) as u16),
+        ;
+        
+        assert forall|loc1: int| (st <= loc1 < ed) implies self@[loc1] == true by {
+            // 将 loc1 归一化到区间起点的第 i 位
+            let i = loc1 - st;
+            assert(0 <= i < width) by (nonlinear_arith)
+                requires 
+                    st <= loc1 < ed,
+                    i == loc1 - st,
+                    width == ed - st,
+            ;
+            
+            assert(get_bits16!(self.bits, st as u16, ed as u16) == (0xffffu16 >> ((16 - width) as u16)));
+
+            get_bits_u16_correctness(insert_val, self.bits, st as u16, ed as u16);
+
+            assert((u16_view(insert_val)[i]) == self@[st + i]);
+
+            assert((insert_val >> i) & 1u16 == 1u16);
+
+            assert((u16_view(insert_val)[i]) == true);
+        }
+    }
 
     // /// Marks a range of bits as allocated (sets them to 0).
     // fn remove(&mut self, range: Range<usize>)
