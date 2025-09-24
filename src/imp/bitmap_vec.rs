@@ -145,6 +145,18 @@ pub trait BitAllocView {
 
     spec fn cascade_not_overflow() -> bool;
 
+    /// The capacity is an exponential multiple of 16.
+    /// and the current bitmap only supports the maximum allocatable page size of 1M.
+    spec fn is_pow16() -> bool;
+
+    // proof fn lemma_cap_is_pow16(&self)
+    //     requires
+    //         self.wf(),
+    //     ensures
+    //         self.wf(),
+    //         is_pow16(Self::spec_cap()),
+    // ;
+
     /// The default value. Workaround for `const fn new() -> Self`.
     fn default() -> Self where Self: Sized;
 
@@ -154,28 +166,30 @@ pub trait BitAllocView {
     fn next(&self, key: usize) -> (res: Option<usize>)
         requires
             self.wf(),
-            Self::cascade_not_overflow(),
             key < Self::spec_cap(),
-        ensures match res {
-            Some(re) => {
-                // If successful, returns the first free index `re` that is not less than `key`.
-                // All indices between `key` and `re` (exclusive) must be allocated (false).
-                &&& self@[re as int] == true
-                &&& re < Self::spec_cap()
-                &&& re >= key
-                &&& forall|i: int| key <= i < re ==> self@[i] == false
+        ensures 
+            self.wf(),
+            match res {
+                Some(re) => {
+                    // If successful, returns the first free index `re` that is not less than `key`.
+                    // All indices between `key` and `re` (exclusive) must be allocated (false).
+                    &&& self@[re as int] == true
+                    &&& re < Self::spec_cap()
+                    &&& re >= key
+                    &&& forall|i: int| key <= i < re ==> self@[i] == false
+                },
+                None => {
+                    // If failed, all indices from `key` to the end are allocated (false).
+                    forall|i: int| key <= i < Self::spec_cap() ==> self@[i] == false
+                }
             },
-            None => {
-                // If failed, all indices from `key` to the end are allocated (false).
-                forall|i: int| key <= i < Self::spec_cap() ==> self@[i] == false
-            }
-        },
     ;    
     
     proof fn lemma_bits_nonzero_implies_exists_true(&self)
         requires
             self.wf(),
         ensures
+            self.wf(),
             self.spec_any() == exists|j:int| 0 <= j < Self::spec_cap() && self@[j] == true,
     ;
 
@@ -190,12 +204,12 @@ pub trait BitAllocView {
     /// Whether a specific bit is free
     fn test(&self, key: usize) -> (res: bool)
         requires
-            Self::cascade_not_overflow(),
+            self.wf(),
             key < Self::spec_cap(),
         ensures
+            self.wf(),
             res == self@[key as int],
     ;
-
 }
 
 /// Allocator of a bitmap, able to allocate / free bits.
@@ -228,14 +242,33 @@ pub trait BitAlloc: BitAllocView{
             }
     ;
 
-    // spec fn update_in_place(ba1: Seq<bool>, ba2: Seq<bool>,i: int) -> bool;
-
-    // /// Allocate a free block with a given size, and return the first bit position.
-    // fn alloc_contiguous(&mut self, size: usize, align_log2: usize) -> Option<usize>
-    //     requires
-    //         0 < size <= old(self).spec_cap(),
-    //         align_log2 < 64,
-    // ;
+    /// Allocates a contiguous block of `size` bits with specified `align_log2` alignment.
+    /// Returns `Some(base_index)` if successful, `None` if no suitable block is found.
+    fn alloc_contiguous(&mut self, size: usize, align_log2: usize) -> (res: Option<usize>)
+        requires
+            old(self).wf(),
+            0 < size <= Self::spec_cap(),
+            align_log2 < 64,
+        ensures 
+            self.wf(),
+            match res {
+                Some(base) => {
+                    // If successful, a contiguous block from `base` to `base + size` is allocated (set to false).
+                    // Other indices remain unchanged.
+                    &&& forall|loc1: int|
+                        (base <= loc1 < (base + size)) ==> self@[loc1] == false
+                    &&& forall|loc2: int|
+                        (0 <= loc2 < base || (base + size) <= loc2  < Self::spec_cap()) ==> self@[loc2] == old(self)@[loc2]
+                },
+                None => {
+                    // If failed, no suitable space was found, and the state is unchanged.
+                    // This implies either no free bits, or all free contiguous blocks are too small or misaligned.
+                    Self::spec_cap() < (1usize << align_log2) || !self.spec_any() ||
+                    // self.bits == 0 || self::spec_cap() < (1usize << align_log2) ||
+                    forall|i: int| (0 <= i <= (Self::spec_cap() - size) as int) ==> has_obstruction(self@, i, size as int,(1usize << align_log2) as int)
+                }
+            },
+    ;
 
     /// Free an allocated bit.
     fn dealloc(&mut self, key: usize)
@@ -334,9 +367,26 @@ impl<T: BitAllocView + std::marker::Copy> BitAllocView for BitAllocCascade16<T> 
         (T::spec_cap() * 16) as usize
     }
 
-    open spec fn cascade_not_overflow() -> bool {
-        T::cascade_not_overflow() && T::spec_cap() * 16 < 1048576
+    /// The capacity is an exponential multiple of 16.
+    /// and the current bitmap only supports the maximum allocatable page size of 1M.
+    open spec fn is_pow16() -> bool {
+        let cap = Self::spec_cap();
+        cap == 16 || cap == 256 || cap == 4096 || cap == 65536 || cap == 1048576
     }
+
+    open spec fn cascade_not_overflow() -> bool {
+        T::cascade_not_overflow() && T::spec_cap() * 16 < 0x100000
+    }
+
+    // proof fn lemma_cap_is_pow16(&self)
+    // {
+    //     assert(is_pow16(T::spec_cap())) by{
+    //         // self.lemma_cap_is_pow16()
+
+    //     };
+    //     assert(Self::spec_cap()==16*T::spec_cap());
+    //     // assert()
+    // }
 
     /// Creates a new `BitAllocCascade16` with all bits set to 0 (all free).
     fn default() -> Self {
@@ -893,6 +943,30 @@ impl<T: BitAlloc + std::marker::Copy> BitAlloc for BitAllocCascade16<T>{
 
     }
 
+    /// Allocates a contiguous block of `size` bits with specified `align_log2` alignment.
+    /// Returns `Some(base_index)` if successful, `None` if no suitable block is found.
+    fn alloc_contiguous(&mut self, size: usize, align_log2: usize) -> (res: Option<usize>)
+    {
+        // assert(Self::spec_cap() == 16);
+        // let i = self.cap().trailing_zeros() as usize;
+        
+        // assert(is_pow16(Self::spec_cap())) by (compute);
+        assert(Self::spec_cap() % 16 == 0) by(nonlinear_arith)
+            requires
+                Self::spec_cap() == 16 * T::spec_cap(),
+                T::spec_cap()>0,
+        ;
+        assume(Self::is_pow16());
+        if let Some(base) = find_contiguous(self, Self::cap(), size, align_log2) {
+            let start = base;
+            let end = base + size;
+            self.remove(start..end);
+            Some(base)
+        } else {
+            None
+        }
+    }
+
     fn dealloc(&mut self, key: usize)
     {
         let i: usize = key / T::cap(); //i < 16
@@ -1038,6 +1112,7 @@ impl<T: BitAlloc + std::marker::Copy> BitAlloc for BitAllocCascade16<T>{
             let ghost old_child = child;
             let ghost cap = T::spec_cap() as int;
 
+            // 分情况讨论证明
             assert(begin < stop) by{
                 if i == st / T::spec_cap(){
                     assert(begin == st % T::spec_cap());
@@ -1514,6 +1589,16 @@ impl<T: BitAlloc + std::marker::Copy> BitAlloc for BitAllocCascade16<T>{
 }
 
 impl<T: BitAllocView + std::marker::Copy> BitAllocCascade16<T> {
+    // &&& forall|k:int|
+    //             0 <= k < 16 ==> self.bitset@[k] == self.sub[k].spec_any()
+    // &&& forall|k:int|
+    //         0 <= k < 16 ==>
+    //         self.bitset@[k] == exists|j:int| 0 <= j < cap && self.sub[k]@[j] == true
+    // &&& forall|k:int|
+    //         0 <= k < 16 ==> self.sub[k].spec_any() == exists|j:int| 0 <= j < cap && self.sub[k]@[j] == true
+    // 父层 bitset 的第 i 位，与父层大bool序列的关系
+    // &&& forall|k:int|
+    //         0 <= k < 16 ==> self.bitset@[k] == sub_has_available(self@, k * cap, (k + 1) * cap)
     proof fn lemma_maintain_view_indexs_mapping(&self)
         requires
             0 < T::spec_cap(),
@@ -1727,10 +1812,6 @@ impl BitAllocView for BitAlloc16 {
         Seq::new(width, |i: int| u16_view(self.bits)[i])
     }
 
-    // open spec fn view_16(&self) -> Seq<bool> {
-    //     Seq::new(16, |i: int| u16_view(self.bits)[i])
-    // }
-
     /// The maximum capacity of the bitmap (16 bits).
     fn cap() -> (res:usize) {
         // Some(16)
@@ -1742,9 +1823,21 @@ impl BitAllocView for BitAlloc16 {
         16
     }
 
+    /// The capacity is an exponential multiple of 16.
+    /// and the current bitmap only supports the maximum allocatable page size of 1M.
+    open spec fn is_pow16() -> bool {
+        let cap = Self::spec_cap();
+        cap == 16 || cap == 256 || cap == 4096 || cap == 65536 || cap == 1048576
+    }
+
     open spec fn cascade_not_overflow() -> bool {
         true
     }
+
+    // proof fn lemma_cap_is_pow16(&self)
+    // {
+    //     assert(Self::spec_cap()==16);
+    // }
 
     /// Creates a new `BitmapAllocator16` with all bits set to 0 (all free).
     fn default() -> Self {
@@ -1753,17 +1846,11 @@ impl BitAllocView for BitAlloc16 {
 
     /// Checks if there are any free bits (bits set to 1) in the bitmap.
     fn any(&self) -> (res:bool){
-        
-        
-            // proof{
-            //     lemma_bits_nonzero_implies_exists_true_bit_16(self.bits, self@);
-            // }
         self.bits != 0
     }
-// exists|j:int| 0 <= j < Self::spec_cap() && self@[j] == true
+
     open spec fn spec_any(&self) -> bool{
-        self.bits != 0 
-            
+        self.bits != 0     
     }
 
     proof fn lemma_bits_nonzero_implies_exists_true(&self)    
@@ -1803,7 +1890,8 @@ impl BitAllocView for BitAlloc16 {
     }
 
     open spec fn wf(&self) -> bool {
-        true
+        &&& Self::cascade_not_overflow()
+        &&& Self::spec_cap() == 16
     }
 
     /// Finds the next free bit (1) starting from `key` (inclusive).
@@ -1872,40 +1960,23 @@ impl BitAlloc for BitAlloc16 {
         Some(i as usize)
     }
 
-    // /// Allocates a contiguous block of `size` bits with specified `align_log2` alignment.
-    // /// Returns `Some(base_index)` if successful, `None` if no suitable block is found.
-    // fn alloc_contiguous(&mut self, size: usize, align_log2: usize) -> (res: Option<usize>)
-    //     ensures match res {
-    //         Some(base) => {
-    //             // If successful, a contiguous block from `base` to `base + size` is allocated (set to false).
-    //             // Other indices remain unchanged.
-    //             get_bits16!(self.bits, base as u16, (base + size) as u16) == 0 &&
-    //             forall|loc2: int|
-    //                 (0 <= loc2 < base || (base + size) <= loc2  < 16) ==> self@[loc2] == old(self)@[loc2]
-    //         },
-    //         None => {
-    //             // If failed, no suitable space was found, and the state is unchanged.
-    //             // This implies either no free bits, or all free contiguous blocks are too small or misaligned.
-    //             self.bits == 0 || self.spec_cap() < (1usize << align_log2) ||
-    //             forall|i: int| (0 <= i <= (self.spec_cap() - size) as int) ==> has_obstruction(self@, i, size as int,(1usize << align_log2) as int)
-    //                 // ==> exists |k: int| 0 <= k < size && #[trigger] self@[i+k] == false
-    //             // true
-    //         }
-    //     },
-    // {
-    //     assert(self.spec_cap() == 16);
-    //     // let i = self.cap().trailing_zeros() as usize;
-    //     assert(is_pow16(self.spec_cap())) by (compute);
-    //     assert(self.spec_cap() % 16 == 0);
-    //     if let Some(base) = find_contiguous(self, self.cap(), size, align_log2) {
-    //         let start = base;
-    //         let end = base + size;
-    //         self.remove(start..end);
-    //         Some(base)
-    //     } else {
-    //         None
-    //     }
-    // }
+    /// Allocates a contiguous block of `size` bits with specified `align_log2` alignment.
+    /// Returns `Some(base_index)` if successful, `None` if no suitable block is found.
+    fn alloc_contiguous(&mut self, size: usize, align_log2: usize) -> (res: Option<usize>)
+    {
+        assert(Self::spec_cap() == 16);
+        // let i = self.cap().trailing_zeros() as usize;
+        assert(Self::is_pow16());
+        assert(Self::spec_cap() % 16 == 0);
+        if let Some(base) = find_contiguous(self, Self::cap(), size, align_log2) {
+            let start = base;
+            let end = base + size;
+            self.remove(start..end);
+            Some(base)
+        } else {
+            None
+        }
+    }
 
     /// Deallocates a single bit at `index` by setting it to 1 (free).
     fn dealloc(&mut self, key: usize)
@@ -2039,194 +2110,212 @@ proof fn safe_shr_lemma(x: usize, shift: usize)
 {
 }
 
-/// The capacity is an exponential multiple of 16.
-/// and the current bitmap only supports the maximum allocatable page size of 1M.
-spec fn is_pow16(cap: usize) -> bool {
-    cap == 16 || cap == 256 || cap == 4096 || cap == 65536 || cap == 1048576
-}
+// /// The capacity is an exponential multiple of 16.
+// /// and the current bitmap only supports the maximum allocatable page size of 1M.
+// pub open spec fn is_pow16(cap: usize) -> bool {
+//     cap == 16 || cap == 256 || cap == 4096 || cap == 65536 || cap == 1048576
+// }
 
 // /// The capacity is an exponential multiple of 16.
 // /// cap == 16 || cap == 256 || cap == 4096 || cap == 65536 || cap == 1048576
-// spec fn is_pow16(cap: usize) -> bool {
+// pub open spec fn is_pow16(cap: usize) -> bool {
 //     cap >= 16 &&
 //     (cap & (cap-1usize) as usize) == 0 &&
 //     (cap % 15usize == 1)
 // }
 
-// /// Finds a contiguous block of `size` free bits within the bitmap, respecting `align_log2`.
-// /// Returns the base index of the found block, or `None` if no such block exists.
-// fn find_contiguous(ba: &impl BitAllocView, capacity: usize, size: usize, align_log2: usize) -> (res: Option<usize>)
-//     requires
-//         capacity == ba.spec_cap(),
-//         align_log2 < 64,
-//         0 < size <= capacity,
-//         capacity < 0x10000,
-//         is_pow16(capacity),
-//     ensures
-//         match res {
-//             Some(base) => {
-//                 // If successful, a block of `size` free bits is found starting at `base`.
-//                 // The block must be within capacity, aligned, and all bits within the block must be free (true).
-//                 &&& base + size <= capacity
-//                 &&& base % (1usize << align_log2) == 0
-//                 &&& forall|i: int| base <= i < base + size ==> ba@[i] == true //ba.next(i) != None
-//             },
-//             None => {
-//                 // If failed, no suitable block exists.
-//                 // This implies either no free bits, or all potential blocks are obstructed or misaligned.
-//                 capacity < (1usize << align_log2) || !ba.spec_any() ||
-//                 forall|i: int| (0 <= i <= capacity - size) ==> has_obstruction(ba@, i, size as int,(1usize << align_log2) as int)
-//             }
-//         }
-// {
-//     // assert(capacity==16);
-//     assert(capacity == ba.spec_cap());
-//     if (capacity < (1usize << align_log2)) || !ba.any() {
-//         return None;
-//     }
-//     assert(capacity >= (1usize << align_log2));
-//     assert(ba.spec_any() == true);
-//     let mut base:usize = 0;
-//     // Proof that initial base (0) is aligned.
-//     assert(base % (1usize << align_log2) == 0) by (bit_vector)
-//         requires
-//             base == 0,
-//             align_log2 < 64,
-//     ;
+/// Finds a contiguous block of `size` free bits within the bitmap, respecting `align_log2`.
+/// Returns the base index of the found block, or `None` if no such block exists.
+fn find_contiguous<T: BitAllocView>(ba: &T, capacity: usize, size: usize, align_log2: usize) -> (res: Option<usize>)
+    requires
+        ba.wf(),
+        capacity == T::spec_cap(),
+        align_log2 < 64,
+        0 < size <= capacity,
+        capacity < 0x100000,
+        // ba.is_pow16(capacity),
+        T::is_pow16(),
+    ensures
+        ba.wf(),
+        match res {
+            Some(base) => {
+                // If successful, a block of `size` free bits is found starting at `base`.
+                // The block must be within capacity, aligned, and all bits within the block must be free (true).
+                &&& base + size <= capacity
+                &&& base % (1usize << align_log2) == 0
+                &&& forall|i: int| base <= i < base + size ==> ba@[i] == true //ba.next(i) != None
+            },
+            None => {
+                // If failed, no suitable block exists.
+                // This implies either no free bits, or all potential blocks are obstructed or misaligned.
+                capacity < (1usize << align_log2) || !ba.spec_any() ||
+                forall|i: int| (0 <= i <= capacity - size) ==> has_obstruction(ba@, i, size as int,(1usize << align_log2) as int)
+            }
+        }
+{
+    // assert(capacity==16);
+    assert(capacity == T::spec_cap());
+    if (capacity < (1usize << align_log2)) || !ba.any() {
+        return None;
+    }
+    assert(capacity >= (1usize << align_log2));
+    assert(ba.spec_any() == true);
+    let mut base:usize = 0;
+    // Proof that initial base (0) is aligned.
+    assert(base % (1usize << align_log2) == 0) by (bit_vector)
+        requires
+            base == 0,
+            align_log2 < 64,
+    ;
 
-//     let mut offset:usize = base;
-//     let mut res:Option<usize> = None;
-//     while offset < capacity
-//         invariant
-//             capacity < 0x10000,
-//             is_pow16(capacity),
-//             capacity >= (1usize << align_log2),
-//             offset <= capacity,
-//             offset - base < size,
-//             forall|i: int| (0 <= i < base) ==> has_obstruction(ba@, i, size as int, (1usize << align_log2) as int),
-//             forall|i: int| (0 <= i < capacity) && (i % (1usize << align_log2) as int != 0) ==> has_obstruction(ba@, i, size as int, (1usize << align_log2) as int),
-//             capacity == ba.spec_cap(),
-//             align_log2 < 64,
-//             0 < size <= capacity,
-//             0 <= base <= offset,
-//             base % (1usize << align_log2) == 0,
-//             forall|i: int| base <= i < offset ==> ba@.index(i),
-//         decreases
-//             capacity - offset,
-//     {
-//         if let Some(next) = ba.next(offset) {
-//             assert(next < ba.spec_cap());
-//             assert(offset - base < size);
-//             assert(next >= offset);
-//             assert(ba@[next as int] == true);
-//             if next != offset {
-//                 assert(next > offset);
-//                 assert(offset<=capacity);
-//                 // it can be guarenteed that no bit in (offset..next) is free
-//                 // move to next aligned position after next-1
-//                 assert(next > 0);
+    let mut offset:usize = base;
+    let mut res:Option<usize> = None;
+    while offset < capacity
+        invariant
+            ba.wf(),
+            capacity < 0x100000,
+            // ba.is_pow16(capacity),
+            T::is_pow16(),
+            capacity >= (1usize << align_log2),
+            offset <= capacity,
+            offset - base < size,
+            forall|i: int| (0 <= i < base) ==> has_obstruction(ba@, i, size as int, (1usize << align_log2) as int),
+            forall|i: int| (0 <= i < capacity) && (i % (1usize << align_log2) as int != 0) ==> has_obstruction(ba@, i, size as int, (1usize << align_log2) as int),
+            capacity == T::spec_cap(),
+            align_log2 < 64,
+            0 < size <= capacity,
+            0 <= base <= offset,
+            base % (1usize << align_log2) == 0,
+            forall|i: int| base <= i < offset ==> ba@.index(i),
+        decreases
+            capacity - offset,
+    {
+        if let Some(next) = ba.next(offset) {
+            assert(next < T::spec_cap());
+            assert(offset - base < size);
+            assert(next >= offset);
+            assert(ba@[next as int] == true);
+            if next != offset {
+                assert(next > offset);
+                assert(offset<=capacity);
+                // it can be guarenteed that no bit in (offset..next) is free
+                // move to next aligned position after next-1
+                assert(next > 0);
 
-//                 assert(ba@[offset as int] == false);
-//                 assert(forall|i: usize| (offset - size < i <= offset) ==> has_obstruction(ba@, i as int, size as int, (1usize << align_log2) as int));
+                assert(ba@[offset as int] == false);
+                assert(forall|i: usize| (offset - size < i <= offset) ==> has_obstruction(ba@, i as int, size as int, (1usize << align_log2) as int));
 
-//                 assert(((next - 1) as usize) >= 0);
-//                 proof{
-//                     safe_shr_lemma(((next - 1) as usize),align_log2);
-//                 }
-//                 base = (((((next - 1) as usize) >> align_log2) + 1) as usize) << align_log2;
-//                 proof{
-//                     lemma_up_align_ge_original(next, capacity, align_log2);
-//                 }
-//                 assert(base >= next);
+                assert(((next - 1) as usize) >= 0);
+                proof{
+                    safe_shr_lemma(((next - 1) as usize),align_log2);
+                }
+                base = (((((next - 1) as usize) >> align_log2) + 1) as usize) << align_log2;
+                
+                assert(capacity == 16 || capacity == 256 || capacity == 4096 || capacity == 65536 || capacity == 1048576) by{
+                    assert(capacity == T::spec_cap());
+                    assert(T::is_pow16());
+                    let cap = T::spec_cap();
+                    // reveal(<T as BitAllocView>::is_pow16);
+                    assert(cap == 16 || cap == 256 || cap == 4096 || cap == 65536 || cap == 1048576);
+                }
 
-//                 assert(forall|i: int| (offset <= i < next) ==> (ba@[i] == false));
-//                 // lemma_bit_false_implies_has_obstruction(ba@,);
-//                 assert forall|i: usize| (offset <= i < next) implies has_obstruction(ba@, i as int, size as int, (1usize << align_log2) as int) by{
-//                     assert(ba@[i as int] == false);
-//                 }
+                proof{
+                    lemma_up_align_ge_original(next, capacity, align_log2);
+                }
+                assert(base >= next);
 
-//                 offset = base;
-//                 assert(offset >= next); // decreases
-//                 assert(base % (1usize << align_log2) == 0) by (bit_vector)
-//                     requires
-//                         base == (((((next - 1) as usize) >> align_log2) + 1) as usize) << align_log2,
-//                         align_log2 < 64,
-//                         capacity < 0x10000,
-//                         0 < next < capacity,
-//                         (1usize << align_log2) <= capacity,
-//                 ;
-//                 proof{
-//                     lemma_up_align_le_capacity(next, capacity, align_log2);
-//                 }
-//                 assert(base <= capacity);
-//                 assert(offset - base < size);
-//                 assert forall|i: usize| (next <= i < base) implies has_obstruction(ba@, i as int, size as int, (1usize << align_log2) as int) by{
-//                     assert(i % (1usize << align_log2) != 0) by (bit_vector)
-//                         requires
-//                             next <= i < base,
-//                             0 < next <= base,
-//                             base == (((((next - 1) as usize) >> align_log2) + 1) as usize) << align_log2,
-//                             base <= capacity,
-//                             align_log2 < 64,
-//                             capacity < 0x10000,
-//                             (1usize << align_log2) <= capacity,
-//                     ;
-//                 }
-//                 continue;
-//             }
-//             assert(offset == next);
+                assert(forall|i: int| (offset <= i < next) ==> (ba@[i] == false));
+                // lemma_bit_false_implies_has_obstruction(ba@,);
+                assert forall|i: usize| (offset <= i < next) implies has_obstruction(ba@, i as int, size as int, (1usize << align_log2) as int) by{
+                    assert(ba@[i as int] == false);
+                }
 
-//         } else {
-//             // No more free bits found from `offset` to `capacity`.
-//             assert(ba@[offset as int] == false);
-//             assert(forall|i: usize| (offset - size < i <= offset) ==> has_obstruction(ba@, i as int, size as int, (1usize << align_log2) as int));
-//             assert forall|i: usize| (offset <= i < capacity) implies has_obstruction(ba@, i as int, size as int, (1usize << align_log2) as int) by{
-//                 assert(ba@[i as int] == false);
-//             }
-//             return None;
-//         }
-//         assert(size > 0);
-//         assert(offset - base < size);
-//         offset += 1;
-//         assert(offset > base);
-//         if offset - base == size {
-//             assert(offset - base == size);
-//             assert(base + size == offset);
-//             res = Some(base);
-//             return res;
-//         }
-//     }
-//     None
-// }
+                offset = base;
+                assert(offset >= next); // decreases
+                assert(base % (1usize << align_log2) == 0) by (bit_vector)
+                    requires
+                        base == (((((next - 1) as usize) >> align_log2) + 1) as usize) << align_log2,
+                        align_log2 < 64,
+                        capacity < 0x100000,
+                        0 < next < capacity,
+                        (1usize << align_log2) <= capacity,
+                ;
+                proof{
+                    lemma_up_align_le_capacity(next, capacity, align_log2);
+                }
+                assert(base <= capacity);
+                assert(offset - base < size);
+                assert forall|i: usize| (next <= i < base) implies has_obstruction(ba@, i as int, size as int, (1usize << align_log2) as int) by{
+                    assert(i % (1usize << align_log2) != 0) by (bit_vector)
+                        requires
+                            next <= i < base,
+                            0 < next <= base,
+                            base == (((((next - 1) as usize) >> align_log2) + 1) as usize) << align_log2,
+                            base <= capacity,
+                            align_log2 < 64,
+                            capacity < 0x100000,
+                            (1usize << align_log2) <= capacity,
+                    ;
+                }
+                continue;
+            }
+            assert(offset == next);
 
-// /// Lemma to prove that aligning `next` upwards results in a value greater than or equal to `next`.
-// #[verifier::bit_vector]
-// proof fn lemma_up_align_ge_original(next:usize, capacity:usize, align_log2:usize)
-//     requires
-//         capacity < 0x10000,
-//         0 < next < capacity,
-//         align_log2 < 64,
-//         (1usize << align_log2) <= capacity,
-//     ensures
-//         (((((next - 1) as usize) >> align_log2) + 1) as usize) << align_log2 >= next
-// {
-//     // assert(align_log2 <= 4);
-// }
+        } else {
+            // No more free bits found from `offset` to `capacity`.
+            assert(ba@[offset as int] == false);
+            assert(forall|i: usize| (offset - size < i <= offset) ==> has_obstruction(ba@, i as int, size as int, (1usize << align_log2) as int));
+            assert forall|i: usize| (offset <= i < capacity) implies has_obstruction(ba@, i as int, size as int, (1usize << align_log2) as int) by{
+                assert(ba@[i as int] == false);
+            }
+            return None;
+        }
+        assert(size > 0);
+        assert(offset - base < size);
+        offset += 1;
+        assert(offset > base);
+        if offset - base == size {
+            assert(offset - base == size);
+            assert(base + size == offset);
+            res = Some(base);
+            return res;
+        }
+    }
+    None
+}
 
-// // /// Lemma to prove that aligning `next` upwards results in a value less than or equal to the capacity (16).
-// #[verifier::bit_vector]
-// proof fn lemma_up_align_le_capacity(next:usize, capacity:usize, align_log2:usize)
-//     requires
-//         capacity <= 0x10000,
-//         0 < next < capacity,
-//         align_log2 < 64,
-//         (1usize << align_log2) <= capacity,
-//         capacity == 16 || capacity == 256 || capacity == 4096 || capacity == 65536 || capacity == 1048576,
-//         // is_pow16(capacity),
-//     ensures
-//         (((((next - 1usize) as usize) >> align_log2) + 1usize) as usize) << align_log2 <= capacity
-// {
-// }
+
+/// Lemma to prove that aligning `next` upwards results in a value greater than or equal to `next`.
+#[verifier::bit_vector]
+proof fn lemma_up_align_ge_original(next:usize, capacity:usize, align_log2:usize)
+    requires
+        capacity < 0x100000,
+        0 < next < capacity,
+        align_log2 < 64,
+        (1usize << align_log2) <= capacity,
+    ensures
+        (((((next - 1) as usize) >> align_log2) + 1) as usize) << align_log2 >= next
+{
+    // assert(align_log2 <= 4);
+}
+
+// /// Lemma to prove that aligning `next` upwards results in a value less than or equal to the capacity (16).
+#[verifier::bit_vector]
+proof fn lemma_up_align_le_capacity(next:usize, capacity:usize, align_log2:usize)
+    requires
+        // 16 <= capacity <= 0x100000,
+        capacity <= 0x100000,
+        0 < next < capacity,
+        align_log2 < 64,
+        (1usize << align_log2) <= capacity,
+        capacity == 16 || capacity == 256 || capacity == 4096 || capacity == 65536 || capacity == 1048576,
+        // (capacity & (capacity-1usize) as usize) == 0,
+        // (capacity % 15usize == 1),
+        // is_pow16(capacity),
+    ensures
+        (((((next - 1usize) as usize) >> align_log2) + 1usize) as usize) << align_log2 <= capacity
+{
+}
 
 }
 #[verifier::external]

@@ -246,8 +246,7 @@ mod tests {
         // ba.insert(0..0);
         // ba.alloc_contiguous(4, 64);
         // ba.test(32);
-        assert_eq!(ba.alloc_contiguous(4, 5), None);
-
+        assert_eq!(ba.alloc_contiguous(0, 16), None);
         // ba.remove(2..5);
         // ba.remove(9..11);
         // ba.remove(14..16);
@@ -306,10 +305,13 @@ mod tests {
     #[test]
     fn BitAlloc1M() {
         let mut ba = BitAlloc256::default();
+        ba.insert(0..256);
+        assert_eq!(ba.alloc_contiguous(255,0), Some(0));
+        assert_eq!(ba.any(), false);
         // assert_eq!(BitAlloc1M::CAP, 1048576);
-        ba.insert(0..1);
+        // ba.insert(0..1);
         // ba.remove(200..256);
-        assert_eq!(ba.alloc(),Some(0));
+        // assert_eq!(ba.alloc(),Some(0));
         // assert_eq!(ba.alloc(),Some(1));
         // assert_eq!(ba.alloc_contiguous(80000, 63), None);
         // // ba.test(5056);
