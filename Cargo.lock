@@ -217,15 +217,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fc0fef456e4baa96da950455cd02c081ca953b141298e41db3fc7e36b1da849c"
 
 [[package]]
-name = "hvisor-ma"
-version = "0.1.0"
-dependencies = [
- "bit_field",
- "criterion",
- "vstd",
-]
-
-[[package]]
 name = "indexmap"
 version = "1.9.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -539,6 +530,15 @@ name = "unicode-xid"
 version = "0.2.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ebc1c04c71510c7f702b52b7c350734c9ff1295c464a03335b00bb84fc54f853"
+
+[[package]]
+name = "verified-memory-allocator"
+version = "0.1.0"
+dependencies = [
+ "bit_field",
+ "criterion",
+ "vstd",
+]
 
 [[package]]
 name = "vstd"

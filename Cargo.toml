@@ -1,5 +1,5 @@
 [package]
-name = "hvisor-ma"
+name = "verified-memory-allocator"
 version = "0.1.0"
 edition = "2021"
 
