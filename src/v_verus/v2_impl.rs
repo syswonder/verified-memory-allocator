@@ -595,3 +595,46 @@ pub fn bitalloc_contiguous() {
         ba.dealloc(i);
     }
 }
+
+pub fn bitalloc1m_alloc(){
+    let mut ba = BitAlloc1M::default();
+    ba.alloc();
+}
+
+pub fn bitalloc1m_alloc_contiguous(){
+    let mut ba = BitAlloc1M::default();
+    ba.alloc_contiguous(1588, 1);
+}
+
+pub fn bitalloc1m_dealloc(){
+    let mut ba = BitAlloc1M::default();
+    // for i in 250..520 {
+    //     ba.dealloc(i);
+    // }
+    ba.dealloc(251);
+}
+
+pub fn bitalloc1m_insert(){
+    let mut ba = BitAlloc1M::default();
+    ba.insert(0..BitAlloc1M::cap());
+}
+
+pub fn bitalloc1m_remove(){
+    let mut ba = BitAlloc1M::default();
+    ba.remove(0..BitAlloc1M::cap());
+}
+
+pub fn bitalloc1m_any(){
+    let mut ba = BitAlloc1M::default();
+    ba.any();
+}
+
+pub fn bitalloc1m_test(){
+    let mut ba = BitAlloc1M::default();
+    ba.test(260);
+}
+
+pub fn bitalloc1m_next(){
+    let mut ba = BitAlloc1M::default();
+    ba.next(260);
+}

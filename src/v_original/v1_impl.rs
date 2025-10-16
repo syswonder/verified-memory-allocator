@@ -1,5 +1,8 @@
+// extern crate bit_field;
 use bit_field::BitField;
 use core::ops::Range;
+// use std::ops::Range;
+
 
 /// Allocator of a bitmap, able to allocate / free bits.
 pub trait BitAlloc: Default {
@@ -265,43 +268,75 @@ pub fn bitalloc4k() {
 
 // #[test]
 pub fn bitalloc_contiguous() {
-    // let mut ba0 = BitAlloc16::default();
-    // ba0.insert(0..BitAlloc16::CAP);
-    // ba0.remove(3..6);
-    // assert_eq!(ba0.next(0), Some(0));
-    // assert_eq!(ba0.alloc_contiguous(1, 1), Some(0));
-    // assert_eq!(find_contiguous(&ba0, BitAlloc4K::CAP, 2, 0), Some(1));
+    let mut ba0 = BitAlloc16::default();
+    ba0.insert(0..BitAlloc16::CAP);
+    ba0.remove(3..6);
+    assert_eq!(ba0.next(0), Some(0));
+    assert_eq!(ba0.alloc_contiguous(1, 1), Some(0));
+    assert_eq!(find_contiguous(&ba0, BitAlloc4K::CAP, 2, 0), Some(1));
 
-    // let mut ba = BitAlloc4K::default();
+    let mut ba = BitAlloc4K::default();
+    ba.alloc();
+    assert_eq!(BitAlloc4K::CAP, 4096);
+    ba.insert(0..BitAlloc4K::CAP);
+    ba.remove(3..6);
+    assert_eq!(ba.next(0), Some(0));
+    assert_eq!(ba.alloc_contiguous(1, 1), Some(0));
+    assert_eq!(ba.next(0), Some(1));
+    assert_eq!(ba.next(1), Some(1));
+    assert_eq!(ba.next(2), Some(2));
+    assert_eq!(find_contiguous(&ba, BitAlloc4K::CAP, 2, 0), Some(1));
+    assert_eq!(ba.alloc_contiguous(2, 0), Some(1));
+    assert_eq!(ba.alloc_contiguous(2, 3), Some(8));
+    ba.remove(0..4096 - 64);
+    assert_eq!(ba.alloc_contiguous(128, 7), None);
+    assert_eq!(ba.alloc_contiguous(7, 3), Some(4096 - 64));
+    ba.insert(321..323);
+    assert_eq!(ba.alloc_contiguous(2, 1), Some(4096 - 64 + 8));
+    assert_eq!(ba.alloc_contiguous(2, 0), Some(321));
+    assert_eq!(ba.alloc_contiguous(64, 6), None);
+    assert_eq!(ba.alloc_contiguous(32, 4), Some(4096 - 48));
+    for i in 0..4096 - 64 + 7 {
+        ba.dealloc(i);
+    }
+    for i in 4096 - 64 + 8..4096 - 64 + 10 {
+        ba.dealloc(i);
+    }
+    for i in 4096 - 48..4096 - 16 {
+        ba.dealloc(i);
+    }
+   
+}
+
+pub fn bitalloc1m(){
+    // let mut ba = BitAlloc1M::default();
     // ba.alloc();
-    // assert_eq!(BitAlloc4K::CAP, 4096);
-    // ba.insert(0..BitAlloc4K::CAP);
+    // assert_eq!(BitAlloc1M::CAP, 1048576);
+    // ba.insert(0..BitAlloc1M::CAP);
     // ba.remove(3..6);
     // assert_eq!(ba.next(0), Some(0));
     // assert_eq!(ba.alloc_contiguous(1, 1), Some(0));
     // assert_eq!(ba.next(0), Some(1));
     // assert_eq!(ba.next(1), Some(1));
     // assert_eq!(ba.next(2), Some(2));
-    // assert_eq!(find_contiguous(&ba, BitAlloc4K::CAP, 2, 0), Some(1));
     // assert_eq!(ba.alloc_contiguous(2, 0), Some(1));
     // assert_eq!(ba.alloc_contiguous(2, 3), Some(8));
     // ba.remove(0..4096 - 64);
-    // assert_eq!(ba.alloc_contiguous(128, 7), None);
+    // assert_eq!(ba.alloc_contiguous(128, 7), Some(4096));
     // assert_eq!(ba.alloc_contiguous(7, 3), Some(4096 - 64));
     // ba.insert(321..323);
     // assert_eq!(ba.alloc_contiguous(2, 1), Some(4096 - 64 + 8));
     // assert_eq!(ba.alloc_contiguous(2, 0), Some(321));
-    // assert_eq!(ba.alloc_contiguous(64, 6), None);
+    // assert_eq!(ba.alloc_contiguous(64, 6), Some(4224));
     // assert_eq!(ba.alloc_contiguous(32, 4), Some(4096 - 48));
-    // for i in 0..4096 - 64 + 7 {
-    //     ba.dealloc(i);
-    // }
-    // for i in 4096 - 64 + 8..4096 - 64 + 10 {
-    //     ba.dealloc(i);
-    // }
-    // for i in 4096 - 48..4096 - 16 {
-    //     ba.dealloc(i);
-    // }
+    // ba.remove(0..4096 - 64 + 7);
+    let mut ba0 = BitAlloc1M::default();
+    ba0.insert(0..BitAlloc1M::CAP);
+    ba0.remove(3..6);
+    assert_eq!(ba0.next(0), Some(0));
+    assert_eq!(ba0.alloc_contiguous(1, 1), Some(0));
+    assert_eq!(find_contiguous(&ba0, BitAlloc4K::CAP, 2, 0), Some(1));
+
     let mut ba = BitAlloc1M::default();
     ba.alloc();
     assert_eq!(BitAlloc1M::CAP, 1048576);
@@ -312,7 +347,6 @@ pub fn bitalloc_contiguous() {
     assert_eq!(ba.next(0), Some(1));
     assert_eq!(ba.next(1), Some(1));
     assert_eq!(ba.next(2), Some(2));
-    // assert_eq!(find_contiguous(&ba, BitAlloc4K::CAP, 2, 0), Some(1));
     assert_eq!(ba.alloc_contiguous(2, 0), Some(1));
     assert_eq!(ba.alloc_contiguous(2, 3), Some(8));
     ba.remove(0..4096 - 64);
@@ -326,4 +360,52 @@ pub fn bitalloc_contiguous() {
     for i in 0..4096 - 64 + 7 {
         ba.dealloc(i);
     }
+    for i in 4096 - 64 + 8..4096 - 64 + 10 {
+        ba.dealloc(i);
+    }
+    for i in 4096 - 48..4096 - 16 {
+        ba.dealloc(i);
+    }
+}
+
+pub fn bitalloc1m_alloc(){
+    let mut ba = BitAlloc1M::default();
+    ba.alloc();
+}
+
+pub fn bitalloc1m_alloc_contiguous(){
+    let mut ba = BitAlloc1M::default();
+    ba.alloc_contiguous(1588, 1);
+}
+
+pub fn bitalloc1m_dealloc(){
+    let mut ba = BitAlloc1M::default();
+    for i in 250..520 {
+        ba.dealloc(i);
+    }
+}
+
+pub fn bitalloc1m_insert(){
+    let mut ba = BitAlloc1M::default();
+    ba.insert(0..BitAlloc1M::CAP);
+}
+
+pub fn bitalloc1m_remove(){
+    let mut ba = BitAlloc1M::default();
+    ba.remove(0..BitAlloc1M::CAP);
+}
+
+pub fn bitalloc1m_any(){
+    let mut ba = BitAlloc1M::default();
+    ba.any();
+}
+
+pub fn bitalloc1m_test(){
+    let mut ba = BitAlloc1M::default();
+    ba.test(260);
+}
+
+pub fn bitalloc1m_next(){
+    let mut ba = BitAlloc1M::default();
+    ba.next(260);
 }
