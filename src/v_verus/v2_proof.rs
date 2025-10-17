@@ -1,5 +1,8 @@
-use core::ops::Range;
 use vstd::{prelude::*, seq_lib::*};
+use core::ops::Range;
+use core::clone::Clone;
+use core::marker::{Sized, Copy};
+use core::option::Option::*;
 
 /// Macro to get a specific bit from a u16 value.
 /// Returns true if the bit at the given index is 1, false otherwise.
