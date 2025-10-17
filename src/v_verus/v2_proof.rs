@@ -356,7 +356,7 @@ impl<T: BitAllocView + Copy> Clone for BitAllocCascade16<T> {
     fn clone(&self) -> Self { *self }
 }
 
-impl<T: BitAllocView + std::marker::Copy> BitAllocView for BitAllocCascade16<T> {
+impl<T: BitAllocView + Copy> BitAllocView for BitAllocCascade16<T> {
     open spec fn view(&self) -> Seq<bool> {
         // 把 16 个子分配器的 view 拼接在一起
         let sub_len = T::spec_cap() as int;
@@ -712,7 +712,7 @@ pub open spec fn view_index_mapping(ba: Seq<bool>, i: int, sub_ba: Seq<bool>, ca
     forall|j:int| 0 <= j < cap ==> ba[(cap * i + j)] == sub_ba[j]
 }
 
-impl<T: BitAlloc + std::marker::Copy> BitAlloc for BitAllocCascade16<T>{
+impl<T: BitAlloc + Copy> BitAlloc for BitAllocCascade16<T>{
 
     fn alloc(&mut self) -> (res:Option<usize>)
     {
@@ -1591,7 +1591,7 @@ impl<T: BitAlloc + std::marker::Copy> BitAlloc for BitAllocCascade16<T>{
     }
 }
 
-impl<T: BitAllocView + std::marker::Copy> BitAllocCascade16<T> {
+impl<T: BitAllocView + Copy> BitAllocCascade16<T> {
     /// Lemma: Ensures the parent view correctly maps each index range to its corresponding child sub-allocator.
     proof fn lemma_maintain_view_indexs_mapping(&self)
         requires
