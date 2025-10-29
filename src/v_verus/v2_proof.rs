@@ -260,6 +260,7 @@ pub trait BitAlloc: BitAllocView{
                 Some(base) => {
                     // If successful, a contiguous block from `base` to `base + size` is allocated (set to false).
                     // Other indices remain unchanged.
+                    &&& base % (1usize << align_log2) == 0
                     &&& forall|loc1: int|
                         (base <= loc1 < (base + size)) ==> self@[loc1] == false
                     &&& forall|loc2: int|
@@ -280,7 +281,7 @@ pub trait BitAlloc: BitAllocView{
         requires
             old(self).wf(),
             key < Self::spec_cap(),
-            old(self)@[key as int],
+            !old(self)@[key as int],
         ensures
             self@ == old(self)@.update(key as int, true),
             self.wf(),
@@ -361,10 +362,13 @@ impl<T: BitAllocView + Copy> BitAllocView for BitAllocCascade16<T> {
         // 把 16 个子分配器的 view 拼接在一起
         let sub_len = T::spec_cap() as int;
         // let sub_len = self.sub[0]@.len() as int;
+        // Seq::new((sub_len * 16) as nat, |idx: int| {
+        //     let i   = idx / sub_len;                   // 第几个子分配器
+        //     let off = idx % sub_len;                   // 子分配器内偏移
+        //     self.sub[i as int]@[off as int]           // 取对应 bit
+        // })
         Seq::new((sub_len * 16) as nat, |idx: int| {
-            let i   = idx / sub_len;                   // 第几个子分配器
-            let off = idx % sub_len;                   // 子分配器内偏移
-            self.sub[i as int]@[off as int]           // 取对应 bit
+            self.sub[idx / sub_len as int]@[idx % sub_len as int]           // 取对应 bit
         })
     }
 
@@ -545,7 +549,7 @@ impl<T: BitAllocView + Copy> BitAllocView for BitAllocCascade16<T> {
         let cap = T::spec_cap() as int;
         &&& Self::cascade_not_overflow()
         &&& Self::lemma_cap_is_pow16_pre()
-        &&& T::spec_cap() > 0
+        // &&& T::spec_cap() > 0
         &&& self.sub.len() == 16
         &&& forall|k:int| 0 <= k < 16 ==> self.sub[k]@.len() == cap
         &&& forall|k:int| 0 <= k < 16 ==> self.sub[k].wf()
@@ -995,17 +999,79 @@ impl<T: BitAlloc + Copy> BitAlloc for BitAllocCascade16<T>{
 
         self.sub[i] = child;
         self.bitset.set_bit(i as u16, true);
-
         //改完值后确保仍然保持 wellformed
         assert(self.bitset@[i as int] == self.sub[i as int].spec_any());
         assert(forall|k:int| 0 <= k < 16 ==> self.sub[k].wf());
-
+        assert(forall|j:int| 0 <= j < 16 && j!=i ==> self.bitset@[j] == old(self).bitset@[j]);
         assert(forall|k:int|
                 0 <= k < 16 ==> self.bitset@[k] == self.sub[k].spec_any());
-        // 证明更新后任然保持view_index_mapping
-        assert forall|j:int| 0 <= j < 16 implies view_index_mapping(self@,j,self.sub[j]@,cap) by{
-            self.lemma_maintain_view_indexs_mapping();
-        }
+        assert(forall|loc2:int| (0 <= loc2 < Self::spec_cap()) ==> self@[loc2] == self.sub[loc2 / cap]@[loc2 % cap]);
+
+        assert(forall|j:int| 0 <= j < 16 && j!=i ==> self.sub[j]@ == old(self).sub[j]@);
+
+        assert(self.sub[i as int]@ == old(self).sub[i as int]@.update(bit_index as int, true));
+
+        assert(self.sub[i as int]@[bit_index as int]);
+
+        assert(bit_index + i * cap < Self::spec_cap()) by(nonlinear_arith)
+            requires
+                bit_index == key % T::spec_cap(),
+                bit_index < cap,
+                key < Self::spec_cap(),
+                Self::spec_cap() == cap * 16,
+                0 <= i < 16,
+                cap > 0,
+        ;
+        // 证明大bool序列改了的那一位
+        assert((i*cap + bit_index) / cap == i) by(nonlinear_arith)
+            requires
+                bit_index + i * cap < Self::spec_cap(),
+                key < Self::spec_cap(),
+                bit_index == key % T::spec_cap(),
+                Self::spec_cap() == cap * 16,
+                0 <= i < 16,
+                cap > 0,
+                bit_index < cap,
+                cap == T::spec_cap(),
+        ;
+        assert((i*cap + bit_index) % cap == bit_index) by(nonlinear_arith)
+            requires
+                bit_index + i * cap < Self::spec_cap(),
+                key < Self::spec_cap(),
+                bit_index == key % T::spec_cap(),
+                Self::spec_cap() == cap * 16,
+                0 <= i < 16,
+                cap > 0,
+                bit_index < cap,
+                cap == T::spec_cap(),
+        ;
+        assert(self@[(i*cap + bit_index) as int] == self.sub[i as int]@[bit_index as int]) by(nonlinear_arith)
+            requires
+                (i*cap + bit_index) / cap == i,
+                (i*cap + bit_index) % cap == bit_index,
+                forall|loc2:int| (0 <= loc2 < Self::spec_cap()) ==> self@[loc2] == self.sub[loc2 / cap]@[loc2 % cap],
+                bit_index + i * cap < Self::spec_cap(),
+                Self::spec_cap() == cap * 16,
+                0 <= i < 16,
+                cap > 0,
+                bit_index < cap,
+        ;
+        assert(self@[key as int] == self.sub[i as int]@[bit_index as int]);
+        
+        assert(key == i*cap + bit_index) by(nonlinear_arith)
+            requires
+                i == key / T::spec_cap(),
+                bit_index == key % T::spec_cap(),
+                (i*cap + bit_index) / cap == i,
+                (i*cap + bit_index) % cap == bit_index,
+                bit_index + i * cap < Self::spec_cap(),
+                Self::spec_cap() == cap * 16,
+                cap == T::spec_cap(),
+                0 <= i < 16,
+                cap > 0,
+                bit_index < cap,
+        ;
+
 
         // 证明大bool序列其他位没有变
         assert forall|loc2:int| (0 <= loc2 < Self::spec_cap() && loc2 != key as int) implies self@[loc2] == old(self)@[loc2] by{
@@ -1026,7 +1092,7 @@ impl<T: BitAlloc + Copy> BitAlloc for BitAllocCascade16<T>{
                     k == loc2 % cap,
                     0 <= loc2 < Self::spec_cap() && loc2 != key as int,
                     Self::spec_cap() == 16*cap,
-            ;
+            ;            
 
             assert(self@[j*cap + k] == self.sub[j]@[k]);
             assert(old(self).sub[j]@[k] == self.sub[j]@[k]);
@@ -1040,6 +1106,10 @@ impl<T: BitAlloc + Copy> BitAlloc for BitAllocCascade16<T>{
                 self@,
                 old(self)@.update(key as int, true)
             );
+        }
+        // 证明更新后任然保持view_index_mapping
+        assert forall|j:int| 0 <= j < 16 implies view_index_mapping(self@,j,self.sub[j]@,cap) by{
+            self.lemma_maintain_view_indexs_mapping();
         }
     }
 
@@ -1760,6 +1830,7 @@ impl BitAllocView for BitAlloc16 {
     open spec fn view(&self) -> Seq<bool> {
         let width = Self::spec_cap() as nat;
         Seq::new(width, |i: int| u16_view(self.bits)[i])
+        // Seq::new(width, |i: int| get_bit16!(self.bits, i as u16))
     }
 
     /// The maximum capacity of the bitmap (16 bits).
