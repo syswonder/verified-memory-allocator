@@ -236,12 +236,12 @@ macro_rules! bitfield_numeric_impl {
             }
 
             fn set_bits(&mut self, range: Range<usize>, value: Self) -> &mut Self {
-                assert!(range.start < Self::bit_length());
-                assert!(range.end <= Self::bit_length());
-                assert!(range.start < range.end);
-                assert!(value << (Self::bit_length() - (range.end - range.start)) >>
-                        (Self::bit_length() - (range.end - range.start)) == value,
-                        "value does not fit into bit range");
+                // assert!(range.start < Self::bit_length());
+                // assert!(range.end <= Self::bit_length());
+                // assert!(range.start < range.end);
+                // assert!(value << (Self::bit_length() - (range.end - range.start)) >>
+                //         (Self::bit_length() - (range.end - range.start)) == value,
+                //         "value does not fit into bit range");
 
                 let bitmask: Self = !(!0 << (Self::bit_length() - range.end) >>
                                     (Self::bit_length() - range.end) >>

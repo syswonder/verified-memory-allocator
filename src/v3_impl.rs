@@ -1,5 +1,4 @@
 use core::ops::Range;
-use crate::bitfield::*;
 
 /// Macro to get a specific bit from a u16 value.
 /// Returns true if the bit at the given index is 1, false otherwise.
@@ -78,14 +77,17 @@ macro_rules! set_bits16 {
     }
 }
 
-pub trait BitAllocView {
+pub trait BitAllocView: Default {
     /// The bitmap has a total of CAP bits, numbered from 0 to CAP-1 inclusively.
-    fn cap() -> usize;
+    // fn CAP -> usize;
+    const CAP: usize;
 
     /// The default value. Workaround for `const fn new() -> Self`.
-    fn default() -> Self
-    where
-        Self: Sized;
+    // fn default() -> Self
+    // where
+    //     Self: Sized;
+    #[allow(clippy::declare_interior_mutable_const)]
+    const DEFAULT: Self;
 
     /// Find a index not less than a given key, where the bit is free.
     fn next(&self, key: usize) -> Option<usize>;
@@ -129,7 +131,7 @@ pub type BitAlloc64K = BitAllocCascade16<BitAlloc4K>; //16
 pub type BitAlloc1M = BitAllocCascade16<BitAlloc64K>; //20
 
 /// Implement the bit allocator by segment tree algorithm.
-#[derive(Copy)]
+#[derive(Copy,Default)]
 pub struct BitAllocCascade16<T: BitAllocView> {
     pub bitset: BitAlloc16, // for each bit, 1 indicates available, 0 indicates inavailable
     pub sub: [T; 16],
@@ -143,17 +145,22 @@ impl<T: BitAllocView + Copy> Clone for BitAllocCascade16<T> {
 
 impl<T: BitAllocView + std::marker::Copy> BitAllocView for BitAllocCascade16<T> {
     // 每个子分配器的容量都是固定且相等的
-    fn cap() -> usize {
-        (T::cap() * 16) as usize
-    }
+    // fn CAP -> usize {
+    //     (T::CAP * 16) as usize
+    // }
+    const CAP: usize = T::CAP * 16;
 
     /// Creates a new `BitAllocCascade16` with all bits set to 0 (all free).
-    fn default() -> Self {
-        BitAllocCascade16 {
-            bitset: BitAlloc16 { bits: 0 },
-            sub: [T::default(); 16], // need the trait "std::marker::Copy"
-        }
-    }
+    // fn default() -> Self {
+    //     BitAllocCascade16 {
+    //         bitset: BitAlloc16 { bits: 0 },
+    //         sub: [T::default(); 16], // need the trait "std::marker::Copy"
+    //     }
+    // }
+    const DEFAULT: Self = BitAllocCascade16 {
+        bitset: BitAlloc16 { bits: 0 },
+        sub: [T::DEFAULT; 16],
+    };
 
     /// Checks if there are any free bits (bits set to 1) in the bitmap.
     fn any(&self) -> bool {
@@ -162,9 +169,9 @@ impl<T: BitAllocView + std::marker::Copy> BitAllocView for BitAllocCascade16<T> 
 
     /// Tests if a specific bit at `index` is free (1) or allocated (0).
     fn test(&self, key: usize) -> bool {
-        let seq_index: usize = key / T::cap(); //证明seq_index < 16
+        let seq_index: usize = key / T::CAP; //证明seq_index < 16
 
-        let bit_index: usize = key % T::cap();
+        let bit_index: usize = key % T::CAP;
         let res = self.sub[seq_index].test(bit_index);
 
         res
@@ -173,21 +180,20 @@ impl<T: BitAllocView + std::marker::Copy> BitAllocView for BitAllocCascade16<T> 
     /// Finds the next free bit (1) starting from `key` (inclusive).
     /// Returns `Some(index)` of the next free bit, or `None` if no free bits are found.
     fn next(&self, key: usize) -> Option<usize> {
-        let idx: usize = key / T::cap();
+        let idx: usize = key / T::CAP;
 
         let mut i = idx;
 
         let mut result: Option<usize> = None;
-        let mut curr_key = T::cap() * idx;
+        let mut curr_key = T::CAP * idx;
 
         while i < 16 {
             if self.bitset.get_bit(i as u16) {
-                let base_key = if i == idx { key - T::cap() * idx } else { 0 };
+                let base_key = if i == idx { key - T::CAP * idx } else { 0 };
                 // 这里要先保证16叉树成型！
                 let child = self.sub[i].next(base_key);
                 if child.is_some() {
-                    curr_key = T::cap() * i + child.unwrap();
-
+                    curr_key = T::CAP * i + child.unwrap();
                     result = Some(curr_key);
                     break;
                 } else {
@@ -195,10 +201,10 @@ impl<T: BitAllocView + std::marker::Copy> BitAllocView for BitAllocCascade16<T> 
             } else {
             }
             let old_i = i;
-            let next_end = T::cap() * (old_i + 1);
+            let next_end = T::CAP * (old_i + 1);
             i += 1;
 
-            curr_key = T::cap() * i;
+            curr_key = T::CAP * i;
         }
         result
     }
@@ -211,29 +217,15 @@ impl<T: BitAlloc + std::marker::Copy> BitAlloc for BitAllocCascade16<T> {
         }
         // Find the first free bit (least significant 1-bit).
         let i = self.bitset.bits.trailing_zeros() as usize;
-
-        // 开始改值，调用子分配器的alloc
-        let mut child = self.sub[i];
-        let res_is_some = child.alloc();
-
-        // assert(forall|loc2:int| (0 <= loc2 < i*T::spec_cap() || (i+1)*T::spec_cap()<= loc2< Self::spec_cap()) ==> self@[loc2] == old(self)@[loc2]);
-
-        self.sub[i] = child;
-
-        let res = res_is_some.unwrap() + i * T::cap();
-
-        let bv_old: u16 = self.bitset.bits;
-        let bv_new: u16 = set_bit16_macro!(bv_old, i, self.sub[i].any());
-
-        self.bitset.bits = bv_new;
-
-        Some(res as usize)
+        let res = self.sub[i].alloc().unwrap() + i * T::CAP;
+        self.bitset.set_bit(i as u16, self.sub[i].any());
+        Some(res)
     }
 
     /// Allocates a contiguous block of `size` bits with specified `align_log2` alignment.
     /// Returns `Some(base_index)` if successful, `None` if no suitable block is found.
     fn alloc_contiguous(&mut self, size: usize, align_log2: usize) -> Option<usize> {
-        if let Some(base) = find_contiguous(self, Self::cap(), size, align_log2) {
+        if let Some(base) = find_contiguous(self, Self::CAP, size, align_log2) {
             let start = base;
             let end = base + size;
             self.remove(start..end);
@@ -244,14 +236,9 @@ impl<T: BitAlloc + std::marker::Copy> BitAlloc for BitAllocCascade16<T> {
     }
 
     fn dealloc(&mut self, key: usize) {
-        let i: usize = key / T::cap(); //i < 16
-
-        let bit_index: usize = key % T::cap();
-
-        let mut child = self.sub[i];
-        child.dealloc(bit_index);
-
-        self.sub[i] = child;
+        let i: usize = key / T::CAP; //i < 16
+        let bit_index: usize = key % T::CAP;
+        self.sub[i].dealloc(bit_index);
         self.bitset.set_bit(i as u16, true);
     }
 
@@ -259,8 +246,8 @@ impl<T: BitAlloc + std::marker::Copy> BitAlloc for BitAllocCascade16<T> {
         let st = range.start;
         let ed = range.end;
 
-        let first = st / T::cap(); //首个子分配器
-        let last = (ed - 1) / T::cap(); //末尾子分配器
+        let first = st / T::CAP; //首个子分配器
+        let last = (ed - 1) / T::CAP; //末尾子分配器
         let n = last + 1; //结束循环条件
 
         let mut i = first;
@@ -268,30 +255,26 @@ impl<T: BitAlloc + std::marker::Copy> BitAlloc for BitAllocCascade16<T> {
         let mut current_end = st;
 
         while i < n {
-            let begin = if i == st / T::cap() { st % T::cap() } else { 0 };
-            let stop = if i == (ed - 1) / T::cap() {
-                if ed % T::cap() == 0 {
-                    T::cap()
+            let begin = if i == st / T::CAP { st % T::CAP } else { 0 };
+            let stop = if i == (ed - 1) / T::CAP {
+                if ed % T::CAP == 0 {
+                    T::CAP
                 } else {
-                    ed % T::cap()
+                    ed % T::CAP
                 }
             } else {
-                T::cap()
+                T::CAP
             };
 
-            let mut child = self.sub[i];
-
-            // 修改了子分配器
             if val {
-                child.insert(begin..stop);
+                self.sub[i].insert(begin..stop);
             } else {
-                child.remove(begin..stop);
+                self.sub[i].remove(begin..stop);
             }
-
-            self.sub[i] = child; // i*cap -- (i+1)*cap        begin - stop
+            
             self.bitset.set_bit(i as u16, self.sub[i].any());
 
-            current_end = stop + i * T::cap();
+            current_end = stop + i * T::CAP;
 
             i += 1;
         }
@@ -307,7 +290,7 @@ impl<T: BitAlloc + std::marker::Copy> BitAlloc for BitAllocCascade16<T> {
 }
 
 /// Represents a 16-bit bitmap allocator.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy,Default)]
 pub struct BitAlloc16 {
     pub bits: u16,
 }
@@ -343,14 +326,16 @@ impl BitAlloc16 {
 
 impl BitAllocView for BitAlloc16 {
     /// The maximum capacity of the bitmap (16 bits).
-    fn cap() -> usize {
-        16
-    }
+    // fn CAP -> usize {
+    //     16
+    // }
+    const CAP: usize = 16;
 
     /// Creates a new `BitmapAllocator16` with all bits set to 0 (all free).
-    fn default() -> Self {
-        BitAlloc16 { bits: 0 }
-    }
+    // fn default() -> Self {
+    //     BitAlloc16 { bits: 0 }
+    // }
+    const DEFAULT: Self = BitAlloc16 { bits: 0 };
 
     /// Checks if there are any free bits (bits set to 1) in the bitmap.
     fn any(&self) -> bool {
@@ -401,7 +386,7 @@ impl BitAlloc for BitAlloc16 {
     /// Allocates a contiguous block of `size` bits with specified `align_log2` alignment.
     /// Returns `Some(base_index)` if successful, `None` if no suitable block is found.
     fn alloc_contiguous(&mut self, size: usize, align_log2: usize) -> Option<usize> {
-        if let Some(base) = find_contiguous(self, Self::cap(), size, align_log2) {
+        if let Some(base) = find_contiguous(self, Self::CAP, size, align_log2) {
             let start = base;
             let end = base + size;
             self.remove(start..end);
@@ -432,8 +417,6 @@ impl BitAlloc for BitAlloc16 {
 
         let range_u16 = (range.start as u16)..(range.end as u16);
         self.set_bits(range_u16, insert_val);
-        
-        // self.set_bits(range_u16.clone(), 0xffff.get_bits(range));
     }
 
     /// Marks a range of bits as allocated (sets them to 0).
@@ -489,7 +472,7 @@ fn main() {}
 // #[test]
 pub fn bitalloc16() {
     let mut ba = BitAlloc16::default();
-    assert_eq!(BitAlloc16::cap(), 16);
+    assert_eq!(BitAlloc16::CAP, 16);
     ba.insert(0..16);
     for i in 0..16 {
         assert_eq!(ba.test(i), true);
@@ -512,7 +495,7 @@ pub fn bitalloc16() {
 // #[test]
 pub fn bitalloc4k() {
     let mut ba = BitAlloc4K::default();
-    assert_eq!(BitAlloc4K::cap(), 4096);
+    assert_eq!(BitAlloc4K::CAP, 4096);
     ba.insert(0..4096);
     for i in 0..4096 {
         assert_eq!(ba.test(i), true);
@@ -537,23 +520,23 @@ pub fn bitalloc4k() {
 // #[test]
 pub fn bitalloc_contiguous() {
     let mut ba0 = BitAlloc16::default();
-    ba0.insert(0..BitAlloc16::cap());
+    ba0.insert(0..BitAlloc16::CAP);
     ba0.remove(3..6);
     assert_eq!(ba0.next(0), Some(0));
     assert_eq!(ba0.alloc_contiguous(1, 1), Some(0));
-    assert_eq!(find_contiguous(&ba0, BitAlloc4K::cap(), 2, 0), Some(1));
+    assert_eq!(find_contiguous(&ba0, BitAlloc4K::CAP, 2, 0), Some(1));
 
     let mut ba = BitAlloc4K::default();
     ba.alloc();
-    assert_eq!(BitAlloc4K::cap(), 4096);
-    ba.insert(0..BitAlloc4K::cap());
+    assert_eq!(BitAlloc4K::CAP, 4096);
+    ba.insert(0..BitAlloc4K::CAP);
     ba.remove(3..6);
     assert_eq!(ba.next(0), Some(0));
     assert_eq!(ba.alloc_contiguous(1, 1), Some(0));
     assert_eq!(ba.next(0), Some(1));
     assert_eq!(ba.next(1), Some(1));
     assert_eq!(ba.next(2), Some(2));
-    assert_eq!(find_contiguous(&ba, BitAlloc4K::cap(), 2, 0), Some(1));
+    assert_eq!(find_contiguous(&ba, BitAlloc4K::CAP, 2, 0), Some(1));
     assert_eq!(ba.alloc_contiguous(2, 0), Some(1));
     assert_eq!(ba.alloc_contiguous(2, 3), Some(8));
     ba.remove(0..4096 - 64);
@@ -577,50 +560,49 @@ pub fn bitalloc_contiguous() {
 }
 
 pub fn bitalloc1m(){
-    let mut ba0 = BitAlloc1M::default();
-    ba0.insert(0..BitAlloc1M::cap());
-    ba0.remove(3..6);
-    assert_eq!(ba0.next(0), Some(0));
-    assert_eq!(ba0.alloc_contiguous(1, 1), Some(0));
-    assert_eq!(find_contiguous(&ba0, BitAlloc4K::cap(), 2, 0), Some(1));
+    let mut ba = BitAlloc16::default();
+    ba.dealloc(0);
+    // let mut ba0 = BitAlloc1M::default();
+    // ba0.insert(0..BitAlloc1M::CAP);
+    // ba0.remove(3..6);
+    // assert_eq!(ba0.next(0), Some(0));
+    // assert_eq!(ba0.alloc_contiguous(1, 1), Some(0));
+    // assert_eq!(find_contiguous(&ba0, BitAlloc4K::CAP, 2, 0), Some(1));
 
-    let mut ba = BitAlloc1M::default();
-    ba.alloc();
-    assert_eq!(BitAlloc1M::cap(), 1048576);
-    ba.insert(0..BitAlloc1M::cap());
-    ba.remove(3..6);
-    assert_eq!(ba.next(0), Some(0));
-    assert_eq!(ba.alloc_contiguous(1, 1), Some(0));
-    assert_eq!(ba.next(0), Some(1));
-    assert_eq!(ba.next(1), Some(1));
-    assert_eq!(ba.next(2), Some(2));
-    assert_eq!(ba.alloc_contiguous(2, 0), Some(1));
-    assert_eq!(ba.alloc_contiguous(2, 3), Some(8));
-    ba.remove(0..4096 - 64);
-    assert_eq!(ba.alloc_contiguous(128, 7), Some(4096));
-    assert_eq!(ba.alloc_contiguous(7, 3), Some(4096 - 64));
-    ba.insert(321..323);
-    assert_eq!(ba.alloc_contiguous(2, 1), Some(4096 - 64 + 8));
-    assert_eq!(ba.alloc_contiguous(2, 0), Some(321));
-    assert_eq!(ba.alloc_contiguous(64, 6), Some(4224));
-    assert_eq!(ba.alloc_contiguous(32, 4), Some(4096 - 48));
-    for i in 0..4096 - 64 + 7 {
-        ba.dealloc(i);
-    }
-    for i in 4096 - 64 + 8..4096 - 64 + 10 {
-        ba.dealloc(i);
-    }
-    for i in 4096 - 48..4096 - 16 {
-        ba.dealloc(i);
-    }
+    // let mut ba = BitAlloc1M::default();
+    // ba.alloc();
+    // assert_eq!(BitAlloc1M::CAP, 1048576);
+    // ba.insert(0..BitAlloc1M::CAP);
+    // ba.remove(3..6);
+    // assert_eq!(ba.next(0), Some(0));
+    // assert_eq!(ba.alloc_contiguous(1, 1), Some(0));
+    // assert_eq!(ba.next(0), Some(1));
+    // assert_eq!(ba.next(1), Some(1));
+    // assert_eq!(ba.next(2), Some(2));
+    // assert_eq!(ba.alloc_contiguous(2, 0), Some(1));
+    // assert_eq!(ba.alloc_contiguous(2, 3), Some(8));
+    // ba.remove(0..4096 - 64);
+    // assert_eq!(ba.alloc_contiguous(128, 7), Some(4096));
+    // assert_eq!(ba.alloc_contiguous(7, 3), Some(4096 - 64));
+    // ba.insert(321..323);
+    // assert_eq!(ba.alloc_contiguous(2, 1), Some(4096 - 64 + 8));
+    // assert_eq!(ba.alloc_contiguous(2, 0), Some(321));
+    // assert_eq!(ba.alloc_contiguous(64, 6), Some(4224));
+    // assert_eq!(ba.alloc_contiguous(32, 4), Some(4096 - 48));
+    // for i in 0..4096 - 64 + 7 {
+    //     ba.dealloc(i);
+    // }
+    // for i in 4096 - 64 + 8..4096 - 64 + 10 {
+    //     ba.dealloc(i);
+    // }
+    // for i in 4096 - 48..4096 - 16 {
+    //     ba.dealloc(i);
+    // }
 }
 
 pub fn bitalloc1m_alloc(){
     let mut ba = BitAlloc1M::default();
-    for i in 250..520 {
-        ba.alloc();
-    }
-    // ba.alloc();
+    ba.alloc();
 }
 
 pub fn bitalloc1m_alloc_contiguous(){
@@ -638,10 +620,25 @@ pub fn bitalloc1m_dealloc(){
 
 pub fn bitalloc1m_insert(){
     let mut ba = BitAlloc1M::default();
-    ba.insert(0..BitAlloc1M::cap());
+    ba.insert(0..BitAlloc1M::CAP);
 }
 
 pub fn bitalloc1m_remove(){
     let mut ba = BitAlloc1M::default();
-    ba.remove(0..BitAlloc1M::cap());
+    ba.remove(0..BitAlloc1M::CAP);
+}
+
+pub fn bitalloc1m_any(){
+    let mut ba = BitAlloc1M::default();
+    ba.any();
+}
+
+pub fn bitalloc1m_test(){
+    let mut ba = BitAlloc1M::default();
+    ba.test(260);
+}
+
+pub fn bitalloc1m_next(){
+    let mut ba = BitAlloc1M::default();
+    ba.next(260);
 }

@@ -2,6 +2,7 @@
 pub mod bitfield;
 // pub mod fib;
 pub mod original;
+pub mod v3_impl;
 // pub mod bitalloc_verus;
 pub mod bitalloc_verus_impl;
 // use super::bitfield::*;
