@@ -1,4 +1,5 @@
 use core::ops::Range;
+use rand::Rng;
 
 /// Macro to get a specific bit from a u16 value.
 /// Returns true if the bit at the given index is 1, false otherwise.
@@ -281,13 +282,38 @@ impl<T: BitAlloc + std::marker::Copy> BitAlloc for BitAllocCascade16<T> {
     }
 
     fn insert(&mut self, range: Range<usize>) {
-        self.set_range_to(range, true);
+        // self.set_range_to(range, true);
+        self.for_range(range, |sub: &mut T, range| sub.insert(range));
     }
 
     fn remove(&mut self, range: Range<usize>) {
-        self.set_range_to(range, false);
+        // self.set_range_to(range, false);
+        self.for_range(range, |sub: &mut T, range| sub.remove(range));
     }
 }
+
+impl<T: BitAlloc> BitAllocCascade16<T> {
+    fn for_range(&mut self, range: Range<usize>, f: impl Fn(&mut T, Range<usize>)) {
+        let Range { start, end } = range;
+        // assert!(start <= end);
+        // assert!(end <= Self::CAP);
+        for i in start / T::CAP..=(end - 1) / T::CAP {
+            let begin = if start / T::CAP == i {
+                start % T::CAP
+            } else {
+                0
+            };
+            let end = if end / T::CAP == i {
+                end % T::CAP
+            } else {
+                T::CAP
+            };
+            f(&mut self.sub[i], begin..end);
+            self.bitset.set_bit(i as u16, self.sub[i].any());
+        }
+    }
+}
+
 
 /// Represents a 16-bit bitmap allocator.
 #[derive(Clone, Copy,Default)]
@@ -560,8 +586,6 @@ pub fn bitalloc_contiguous() {
 }
 
 pub fn bitalloc1m(){
-    // let mut ba = BitAlloc16::default();
-    // ba.dealloc(0);
     let mut ba0 = BitAlloc1M::default();
     ba0.insert(0..BitAlloc1M::CAP);
     ba0.remove(3..6);
@@ -600,8 +624,17 @@ pub fn bitalloc1m(){
     }
 }
 
-pub fn bitalloc1m_alloc(){
+pub fn bitalloc1m_new() -> BitAlloc1M {
     let mut ba = BitAlloc1M::default();
+    // let mut rng = rand::thread_rng();
+    // let ops = rng.gen_range(0..BitAlloc1M::CAP);
+    ba.insert(0..BitAlloc1M::CAP);
+    ba
+}
+
+pub fn bitalloc1m_alloc() {
+    let mut ba = BitAlloc1M::default();
+    // ba.insert(0..1);
     ba.alloc();
 }
 

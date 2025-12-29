@@ -617,10 +617,10 @@ pub fn bitalloc1m(){
 
 pub fn bitalloc1m_alloc(){
     let mut ba = BitAlloc1M::default();
-    for i in 250..520 {
-        ba.alloc();
-    }
-    // ba.alloc();
+    // for i in 250..520 {
+    //     ba.alloc();
+    // }
+    ba.alloc();
 }
 
 pub fn bitalloc1m_alloc_contiguous(){
@@ -630,10 +630,10 @@ pub fn bitalloc1m_alloc_contiguous(){
 
 pub fn bitalloc1m_dealloc(){
     let mut ba = BitAlloc1M::default();
-    for i in 250..520 {
-        ba.dealloc(i);
-    }
-    // ba.dealloc(251);
+    // for i in 250..520 {
+    //     ba.dealloc(i);
+    // }
+    ba.dealloc(251);
 }
 
 pub fn bitalloc1m_insert(){
