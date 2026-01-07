@@ -277,7 +277,7 @@ pub trait BitAlloc: BitAllocView{
         requires
             old(self).wf(),
             key < Self::spec_cap(),
-            old(self)@[key as int],
+            !old(self)@[key as int],
         ensures
             self@ == old(self)@.update(key as int, true),
             self.wf(),

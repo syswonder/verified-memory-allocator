@@ -157,10 +157,12 @@ pub trait BitAlloc: BitAllocView{
                 Some(base) => {
                     // If successful, a contiguous block from `base` to `base + size` is allocated (set to false).
                     // Other indices remain unchanged.
+                    &&& base % (1usize << align_log2) == 0
                     &&& forall|loc1: int|
                         (base <= loc1 < (base + size)) ==> self@[loc1] == false
                     &&& forall|loc2: int|
                         (0 <= loc2 < base || (base + size) <= loc2  < Self::spec_cap()) ==> self@[loc2] == old(self)@[loc2]
+                    &&& self@.len() == old(self)@.len()
                 },
                 None => {
                     // If failed, no suitable space was found, and the state is unchanged.
@@ -176,7 +178,7 @@ pub trait BitAlloc: BitAllocView{
         requires
             old(self).wf(),
             key < Self::spec_cap(),
-            old(self)@[key as int],
+            !old(self)@[key as int],
         ensures
             self@ == old(self)@.update(key as int, true),
             self.wf(),
